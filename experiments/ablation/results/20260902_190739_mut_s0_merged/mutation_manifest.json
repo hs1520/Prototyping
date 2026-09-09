@@ -1,0 +1,202 @@
+{
+  "source": "experiments/ablation/results/20260902_133704_s3_prefix_matched/runs/NO-DSE_seed0",
+  "sets": {
+    "CONTROL": [],
+    "SYNTAX": [
+      {
+        "op": "DOC-QUOTE",
+        "line": 276
+      },
+      {
+        "op": "DOC-QUOTE",
+        "line": 277
+      },
+      {
+        "op": "DOC-QUOTE",
+        "line": 278
+      },
+      {
+        "op": "READONLY",
+        "line": 93,
+        "target": "airframeObstacleSeparation : LengthValue = 0.0 [m];"
+      },
+      {
+        "op": "READONLY",
+        "line": 97,
+        "target": "hoverThrottleMargin : DimensionOneValue = 0.0 [percent];"
+      },
+      {
+        "op": "C-NEGATION",
+        "line": 463,
+        "target": "onboardSensorReportsFailure"
+      },
+      {
+        "op": "GUARD-ATTR-MISSING",
+        "line": 626,
+        "target": "propulsionCriticalFailure"
+      },
+      {
+        "op": "TYPE-TYPO",
+        "line": 308,
+        "target": "ObstacleSeparationPort -> ObstacleSeparationPor"
+      }
+    ],
+    "CONNECT": [
+      {
+        "op": "DROP-CONNECT",
+        "line": 820,
+        "target": "connect perceptionSystem.obstacleSeparation to flightController.obstacleSeparation;"
+      },
+      {
+        "op": "DROP-CONNECT",
+        "line": 823,
+        "target": "connect powerSystem.flightDuration to flightController.flightDuration;"
+      },
+      {
+        "op": "PORT-DIRECTION",
+        "line": 309,
+        "target": "hoverThrottleMargin"
+      }
+    ],
+    "BEHAVIOUR": [
+      {
+        "op": "DROP-TRANSITION",
+        "line": 408,
+        "target": "transition toAvoiding",
+        "machine": "AvoidanceBehavior"
+      },
+      {
+        "op": "DROP-ENTRY-ACTION",
+        "line": 419,
+        "target": "navigateRevisedWaypointSequence",
+        "machine": "WaypointModificationBehavior"
+      }
+    ],
+    "ALL": [
+      {
+        "op": "DOC-QUOTE",
+        "line": 276
+      },
+      {
+        "op": "DOC-QUOTE",
+        "line": 277
+      },
+      {
+        "op": "DOC-QUOTE",
+        "line": 278
+      },
+      {
+        "op": "READONLY",
+        "line": 93,
+        "target": "airframeObstacleSeparation : LengthValue = 0.0 [m];"
+      },
+      {
+        "op": "READONLY",
+        "line": 97,
+        "target": "hoverThrottleMargin : DimensionOneValue = 0.0 [percent];"
+      },
+      {
+        "op": "C-NEGATION",
+        "line": 463,
+        "target": "onboardSensorReportsFailure"
+      },
+      {
+        "op": "GUARD-ATTR-MISSING",
+        "line": 626,
+        "target": "propulsionCriticalFailure"
+      },
+      {
+        "op": "TYPE-TYPO",
+        "line": 308,
+        "target": "ObstacleSeparationPort -> ObstacleSeparationPor"
+      },
+      {
+        "op": "DROP-CONNECT",
+        "line": 819,
+        "target": "connect perceptionSystem.obstacleSeparation to flightController.obstacleSeparation;"
+      },
+      {
+        "op": "DROP-CONNECT",
+        "line": 822,
+        "target": "connect powerSystem.flightDuration to flightController.flightDuration;"
+      },
+      {
+        "op": "PORT-DIRECTION",
+        "line": 309,
+        "target": "hoverThrottleMargin"
+      },
+      {
+        "op": "DROP-TRANSITION",
+        "line": 408,
+        "target": "transition toAvoiding",
+        "machine": "AvoidanceBehavior"
+      },
+      {
+        "op": "DROP-ENTRY-ACTION",
+        "line": 419,
+        "target": "navigateRevisedWaypointSequence",
+        "machine": "WaypointModificationBehavior"
+      }
+    ]
+  },
+  "provider": "vertex",
+  "base_pipeline_kwargs": {
+    "max_iterations": 4,
+    "dse_mode": "variation",
+    "verbose": false
+  },
+  "campaign": "20260902_190739_mut_s0_merged",
+  "merged_from": [
+    {
+      "campaign": "20260902_175355_mut_s0",
+      "commit": "e9cbdcd80da6d824dbba298931862daa917e2382",
+      "cells": [
+        "FULL:CONTROL",
+        "NO-REFINE:CONTROL",
+        "NO-SURGICAL:CONTROL",
+        "NO-DETFIX:CONTROL",
+        "NO-REPAIR:CONTROL",
+        "FULL:SYNTAX",
+        "NO-REFINE:SYNTAX",
+        "NO-SURGICAL:SYNTAX",
+        "NO-DETFIX:SYNTAX",
+        "NO-REPAIR:SYNTAX",
+        "FULL:CONNECT",
+        "NO-REFINE:CONNECT",
+        "NO-SURGICAL:CONNECT",
+        "NO-DETFIX:CONNECT",
+        "NO-REPAIR:CONNECT",
+        "FULL:BEHAVIOUR",
+        "NO-REFINE:BEHAVIOUR",
+        "NO-SURGICAL:BEHAVIOUR",
+        "NO-DETFIX:BEHAVIOUR",
+        "NO-REPAIR:BEHAVIOUR",
+        "FULL:ALL",
+        "NO-REFINE:ALL",
+        "NO-SURGICAL:ALL",
+        "NO-DETFIX:ALL",
+        "NO-REPAIR:ALL"
+      ]
+    },
+    {
+      "campaign": "20260902_190031_mut_s0_fix5",
+      "commit": "9de6eb72e5a5a15e9d2bb69b646a15dc0ba3ed15",
+      "cells": [
+        "NO-SURGICAL:CONNECT",
+        "NO-SURGICAL:BEHAVIOUR",
+        "NO-SURGICAL:ALL",
+        "FULL:BEHAVIOUR",
+        "NO-DETFIX:BEHAVIOUR"
+      ]
+    }
+  ],
+  "arms": [
+    "FULL",
+    "NO-REFINE",
+    "NO-SURGICAL",
+    "NO-DETFIX",
+    "NO-REPAIR"
+  ],
+  "git_commit": "merged: 20260902_175355_mut_s0@e9cbdcd80da6, 20260902_190031_mut_s0_fix5@9de6eb72e5a5",
+  "started": "20260902_190739"
+}

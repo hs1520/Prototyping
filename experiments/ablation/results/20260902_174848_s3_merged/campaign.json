@@ -1,0 +1,142 @@
+{
+  "system": "AutonomousDrone",
+  "requirement_source": "examples/drone_system_v2.py (DRONE_FROZEN_REQUIREMENTS)",
+  "provider": "vertex",
+  "base_pipeline_kwargs": {
+    "max_iterations": 4,
+    "dse_mode": "variation",
+    "verbose": false
+  },
+  "mcts_iterations": 20,
+  "arm_registry": {
+    "FULL": {
+      "name": "FULL",
+      "ablated_component": "none (baseline — production default pipeline)",
+      "question": "Baseline for every paired comparison; its own failure rate quantifies current full-chain robustness.",
+      "pipeline_kwargs": {},
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "aa8bc962967029f89e0dfcba0996acd40bac7626a6fe2675de23a30caca4db62"
+    },
+    "NO-DSE": {
+      "name": "NO-DSE",
+      "ablated_component": "bilevel design-space exploration (explore() skipped)",
+      "question": "Does DSE materially improve the final design over the generate-only model?",
+      "pipeline_kwargs": {},
+      "run_dse": false,
+      "posthoc": false,
+      "digest": "d735d73b123264afdbd73c5899466bbeaa82fa4ac05987ecda834a2f7fd0434f"
+    },
+    "DSE-BILEVEL": {
+      "name": "DSE-BILEVEL",
+      "ablated_component": "LLM-declared variation points → catalog-operator bilevel DSE",
+      "question": "How do the two DSE modes compare on the same spec?",
+      "pipeline_kwargs": {
+        "dse_mode": "bilevel"
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "eb259bc3f4f2189c024317d14c6f4d6fd3f36f2c464e8aeecdaacf2adf04a337"
+    },
+    "NO-REFINE": {
+      "name": "NO-REFINE",
+      "ablated_component": "iterative refinement loop (max_iterations 4 → 1)",
+      "question": "What does iterative refinement contribute beyond the first evaluated candidate?",
+      "pipeline_kwargs": {
+        "max_iterations": 1
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "23592470e6c6f81edfea1fca1e0172cd63dcfafb71e2f20aab7817a57fc5d159"
+    },
+    "NO-SURGICAL": {
+      "name": "NO-SURGICAL",
+      "ablated_component": "surgical block-level refinement (whole-model rewrite only)",
+      "question": "What do scoped block edits save vs full rewrites in quality, preservation, and tokens?",
+      "pipeline_kwargs": {
+        "use_surgical_refinement": false
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "28fdf8fdf953add31760065468f0b55ba8dbbeddca932ef2abe487704ecbdaf5"
+    },
+    "NO-DETFIX": {
+      "name": "NO-DETFIX",
+      "ablated_component": "deterministic fixer chain (Tier-0 syntax fixes; connectivity direction/missing-connect fixes)",
+      "question": "How many LLM calls and failures does the deterministic repair layer absorb?",
+      "pipeline_kwargs": {
+        "use_deterministic_fixers": false
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "5acac5d81b9be0ae990417a5b0100631550ccea16b3832c0c34e8fbd4f5406ae"
+    },
+    "NO-REPAIR": {
+      "name": "NO-REPAIR",
+      "ablated_component": "combined repair stack: iterative refinement (max_iterations 4 -> 1) AND surgical block-level refinement (whole-model rewrite only; surgical-hosted exit passes inactive, closure retains its full-rewrite fallback)",
+      "question": "Is the repair stack redundant, or does stripping both the iteration budget and the surgical mechanism break the run where single ablations were absorbed?",
+      "pipeline_kwargs": {
+        "max_iterations": 1,
+        "use_surgical_refinement": false
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "728a45c8f1a3478b7c8d1bec027a8d4c4414e6a5ae80dd741537a05964cfc6da"
+    },
+    "SINGLE-SHOT": {
+      "name": "SINGLE-SHOT",
+      "ablated_component": "multistep typed-plan generation → legacy single-prompt whole-model generation (plan-conformance gates inapplicable by construction)",
+      "question": "Is structured multistep decomposition necessary, or can one prompt produce an admissible model?",
+      "pipeline_kwargs": {
+        "design_generation_mode": "single_shot"
+      },
+      "run_dse": true,
+      "posthoc": false,
+      "digest": "460b211c5e8ca5ac0a830f9c80ea36681375d91237b98046c0e6db0558648d8b"
+    },
+    "W-UNIFORM": {
+      "name": "W-UNIFORM",
+      "ablated_component": "requirement-derived recommendation weights → uniform weights (offline replay on FULL's saved Pareto fronts)",
+      "question": "Does requirement-traceable weighting actually change which design is recommended?",
+      "pipeline_kwargs": {},
+      "run_dse": true,
+      "posthoc": true,
+      "digest": "592b106b92c24e2f67da2f639464a2638ba8df9ebc6794bc06dbfbf88f01ae58"
+    }
+  },
+  "campaign": "20260902_174848_s3_merged",
+  "merged_from": [
+    {
+      "campaign": "20260902_133704_s3_prefix_matched",
+      "commit": "04a9f7f3ce10d5278df996230f4a312707d745a0",
+      "seeds": [
+        0,
+        2
+      ],
+      "records": 16
+    },
+    {
+      "campaign": "20260902_164714_s1_fix_full",
+      "commit": "a384e551329918d8df62ea03c90662593d94ab73",
+      "seeds": [
+        1
+      ],
+      "records": 1
+    },
+    {
+      "campaign": "20260902_165930_s1_fix_arms",
+      "commit": "a384e551329918d8df62ea03c90662593d94ab73",
+      "seeds": [
+        1
+      ],
+      "records": 7
+    }
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "git_commit": "merged: 20260902_133704_s3_prefix_matched@04a9f7f3ce10, 20260902_164714_s1_fix_full@a384e5513299, 20260902_165930_s1_fix_arms@a384e5513299",
+  "started": "20260902_174848"
+}

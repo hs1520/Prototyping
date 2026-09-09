@@ -1,0 +1,26 @@
+{
+  "artifact_role": "FINAL_SCORE_RESCORE",
+  "ruler_commit": "dc35e75 (7-dim: specialization-inheritance-aware, machinery-exempt, dse_fidelity variation-mode)",
+  "input": "final_model.sysml + run_report.json requirements + pareto_alternatives[0].parameters",
+  "old_final_score": 0.9145,
+  "rescored_total": 0.9535,
+  "dims": {
+    "syntactic_validity": 1.0,
+    "requirement_coverage": 0.88,
+    "structural_completeness": 1.0,
+    "behavioral_verification": 0.947,
+    "safety_assurance": 1.0,
+    "interface_quality": 1.0,
+    "dse_fidelity": 1.0
+  },
+  "weights_used": {
+    "syntactic_validity": 0.1,
+    "requirement_coverage": 0.2942,
+    "structural_completeness": 0.12,
+    "behavioral_verification": 0.2092,
+    "safety_assurance": 0.1569,
+    "interface_quality": 0.0196,
+    "dse_fidelity": 0.1
+  },
+  "note": "Deterministic post-hoc rescore; model text untouched. Old score was computed by the pre-migration evaluator (three specialization-inheritance blind spots + dse_fidelity gated on legacy parametric keys). Use this value beside the Study A ablation table; the 43/56 obligation verdict is unaffected (different instrument)."
+}

@@ -1,19 +1,13 @@
-"""
-syntax_checker.py
-
-用 syside 原生 API 对 SysML v2 文本做语法/语义检查，
-返回结构化结果供 evaluator 打分和 orchestrator 做 syntax gate。
-
-三类诊断：
-  parser     — 硬语法错误（token 级别），LLM 输出必须修复
-  sema       — 语义引用错误（找不到类型/命名空间等）
-  warnings   — 警告，不影响 pass/fail
-"""
+"""syntax_checker.py"""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List
+
+from ..sysml.diagnostics import is_stdlib_sema_error
+from ..utils.suppressed import record_suppressed
 
 try:
     import syside as _syside
@@ -23,105 +17,44 @@ except ImportError:
     _SYSIDE_OK = False
 
 
-# ---------------------------------------------------------------------------
-# SysML v2 standard library types — implicitly available in all conformant
-# tools (SysML v2 Pilot, Cameo, Rhapsody).  syside flags these as undefined
-# because it doesn't inject them automatically, but they are NOT real model
-# errors in practice.
-# ---------------------------------------------------------------------------
+_EXPECTED_SET_RE = re.compile(r"expected one of \[(.*)\]", re.S)
+_QUOTED_TOKEN_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
 
-_STDLIB_TYPE_NAMES = {
-    # ScalarValues (KerML)
-    "Real", "Integer", "Boolean", "String", "Rational", "Complex",
-    "ScalarValue", "NumericalValue",
-    # ISQ / SI units
-    "ISQ", "SI", "LengthValue", "MassValue", "TimeValue", "VelocityValue",
-    "AccelerationValue", "ForceValue", "EnergyValue", "PowerValue",
-    "FrequencyValue", "AngleValue", "TemperatureValue", "VoltageValue",
-    "CurrentValue", "ChargeValue",
-    # SysML standard packages
-    "SysML", "KerML", "ScalarValues", "Quantities",
-    "Occurrences", "Transfers", "Connections",
-    "Requirements", "Constraints", "Parts", "Ports",
-    "Interfaces", "Flows", "Actions", "States", "UseCases",
-    "Allocations", "Geometries",
-}
-
-# SI / ISQ unit feature names used in attribute definitions like `= 15.0 [m/s]`
-# syside reports these as "No Feature named 'X' found." — also false positives.
-_STDLIB_UNIT_NAMES = {
-    # Length / area / volume
-    "m", "km", "cm", "mm", "um", "nm",
-    # Time
-    "s", "ms", "us", "ns", "min", "h", "hr",
-    # Mass
-    "kg", "g", "mg",
-    # Angle
-    "deg", "rad", "grad",
-    # Frequency
-    "Hz", "kHz", "MHz", "GHz",
-    # Speed
-    "m_s", "km_h", "knot",
-    # Acceleration
-    "m_s2",
-    # Force / pressure
-    "N", "kN", "Pa", "kPa", "MPa", "bar",
-    # Energy / power
-    "J", "kJ", "W", "kW", "MW",
-    # Voltage / current / charge
-    "V", "mV", "kV", "A", "mA", "C", "Ah",
-    # Temperature  (Cel = UCUM/SI symbol for degree Celsius — the SI library's
-    # canonical name; degC/degF are LLM-friendly aliases)
-    "K", "degC", "Cel", "degF",
-    # Energy / charge capacity & rotation (common in drone/EV domains)
-    "Wh", "kWh", "mAh", "rpm", "Nm",
-    # Sound
-    "dB", "dBA",
-    # Percentage / dimensionless
-    "pct", "percent",
-    # Data / information units (LLM commonly annotates comms attributes with these)
-    "bit", "bits", "byte", "bytes", "B",
-    "kbit", "Kbit", "Mbit", "Gbit",
-    "kB", "MB", "GB", "TB",
-    "bps", "kbps", "Kbps", "Mbps", "Gbps", "baud",
-    # Misc
-    "G", "g_force", "lx", "lm", "cd",
-    # Compound unit names that LLM might use
-    "mm_hr", "m_s2", "rad_s",
-    # SysML unit packages
-    "SI", "ISQ",
-    # SysML v2 state machine pseudo-states / reserved feature names
-    "initial", "final", "done", "accept",
-}
+_KEPT_ALTERNATIVES = 6
 
 
-def _is_stdlib_sema_error(message: str) -> bool:
+def condense_diagnostic(message: str, *, kept: int = _KEPT_ALTERNATIVES) -> str:
+    """Shorten a syside parser diagnostic for a repair prompt, not for logs.
+
+    Syside reports a parse failure with the whole expected-terminal set of its
+    current state - around 200 alternatives, ~2400 characters, including grammar
+    rule names like ``Dependency_repeat1`` - longer than the code chunk it is
+    attached to, and not discriminating: one measured run listed the rejected
+    token inside its own expected set. The head (which token was rejected, and
+    where) is kept and the tail cut to a handful of alternatives. Prompt-budget
+    measure only: raw messages stay verbatim in the console, the run artifacts
+    and the diagnostics record.
     """
-    Return True if this sema error is purely about a missing standard-library
-    type or unit — i.e. a false positive caused by syside's strict parsing mode.
+    text = str(message or "")
+    match = _EXPECTED_SET_RE.search(text)
+    if not match:
+        return text
+    alternatives = _QUOTED_TOKEN_RE.findall(match.group(1))
+    if len(alternatives) <= kept:
+        return text
+    remaining = len(alternatives) - kept
+    condensed = (
+        "expected one of ["
+        + ", ".join(alternatives[:kept])
+        + f", … +{remaining} more]"
+    )
+    return text[:match.start()] + condensed + text[match.end():]
 
-    Patterns matched:
-      "No Type named '<X>' found."      — stdlib type (Real, Boolean …)
-      "No Namespace named '<X>' found." — stdlib package (SI, ISQ …)
-      "No Feature named '<X>' found."   — SI unit symbol (m, Hz, deg …)
-    """
-    import re
-    m = re.search(r"No (?:Type|Namespace|Feature) named '([^']+)' found", message)
-    if not m:
-        return False
-    name = m.group(1)
-    root = name.split("::")[0]
-    return root in _STDLIB_TYPE_NAMES or root in _STDLIB_UNIT_NAMES
-
-
-# ---------------------------------------------------------------------------
-# Result data class
-# ---------------------------------------------------------------------------
 
 @dataclass
 class SyntaxCheckResult:
     has_errors: bool
-    parser_errors: List[Dict] = field(default_factory=list)   # {line, col, message, code}
+    parser_errors: List[Dict] = field(default_factory=list)
     sema_errors:   List[Dict] = field(default_factory=list)
     warnings:      List[Dict] = field(default_factory=list)
     score: float = 1.0
@@ -163,40 +96,64 @@ class SyntaxCheckResult:
         return "✗ " + ", ".join(parts) + " error(s)"
 
 
-# ---------------------------------------------------------------------------
-# Score calculation
-# ---------------------------------------------------------------------------
-
 def _compute_score(n_parser: int, n_sema: int, n_warn: int) -> float:
+    """1.0  - no diagnostics
+    >=0.5 - warnings only (0.05 each, floored at 0.5: the old linear formula
+           sent 46 warnings with zero errors to 0.0 - the same score as a hard
+           parse failure - which tripped the "fails compilation" veto and
+           pinned refinement at the cap.)
+    0.5  - sema errors only (undefined types are often fixable)
+    0.1  - parser errors (hard syntax failure)
+    With errors present, deductions compound; floor is 0.0.
     """
-    1.0  — no errors
-    0.85 — warnings only
-    0.5  — sema errors only (undefined types are often fixable)
-    0.1  — parser errors (hard syntax failure)
-    Deductions compound; floor is 0.0.
-    """
+    if n_parser == 0 and n_sema == 0:
+        return round(max(0.5, 1.0 - 0.05 * n_warn), 4)
     score = 1.0 - 0.25 * n_parser - 0.12 * n_sema - 0.05 * n_warn
     return round(max(0.0, min(1.0, score)), 4)
 
 
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
+def check_syntax(
+    sysml_text: str,
+    *,
+    fail_closed: bool = False,
+    filter_stdlib_diagnostics: bool = True,
+) -> SyntaxCheckResult:
+    """Parse *sysml_text* with syside and return a SyntaxCheckResult.
 
-def check_syntax(sysml_text: str) -> SyntaxCheckResult:
-    """
-    Parse *sysml_text* with syside and return a SyntaxCheckResult.
-
-    If syside is unavailable, returns a clean result (score=1.0) so the
-    rest of the pipeline is not blocked.
+    Legacy callers keep the best-effort behavior. Evidence-producing paths pass
+    ``fail_closed=True`` and ``filter_stdlib_diagnostics=False`` so a missing
+    tool, load failure or unresolved standard-library reference is an error
+    rather than a synthetic PASS.
     """
     if not _SYSIDE_OK:
+        if fail_closed:
+            return SyntaxCheckResult(
+                has_errors=True,
+                sema_errors=[{
+                    "line": 0,
+                    "col": 0,
+                    "message": "Syside Python API is unavailable",
+                    "code": "SYSIDE_UNAVAILABLE",
+                }],
+                score=0.0,
+            )
         return SyntaxCheckResult(has_errors=False, score=1.0)
 
     try:
         _model, diags = _syside.try_load_model(sysml_source=sysml_text)
-    except Exception:
-        # Can't even call the API — treat as unverified (neutral score)
+    except Exception as exc:
+        if fail_closed:
+            return SyntaxCheckResult(
+                has_errors=True,
+                sema_errors=[{
+                    "line": 0,
+                    "col": 0,
+                    "message": f"Syside model load failed: {exc}",
+                    "code": "SYSIDE_LOAD_FAILED",
+                }],
+                score=0.0,
+            )
+        # Historical non-evidence callers treat tool failure as unverified/neutral.
         return SyntaxCheckResult(has_errors=False, score=1.0)
 
     def _collect(category, filter_stdlib: bool = False) -> List[Dict]:
@@ -204,20 +161,23 @@ def check_syntax(sysml_text: str) -> SyntaxCheckResult:
         try:
             for d in category:
                 msg = getattr(d, "message", str(d))
-                if filter_stdlib and _is_stdlib_sema_error(msg):
-                    continue   # skip false positives from stdlib types
+                if filter_stdlib and is_stdlib_sema_error(msg):
+                    continue
                 out.append({
                     "line":    getattr(d, "line",    0),
                     "col":     getattr(d, "col",     0),
                     "message": msg,
                     "code":    getattr(d, "code",    ""),
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            record_suppressed("simulation.syntax_checker.diag_collect", exc)
         return out
 
     parser_errs = _collect(diags.parser)
-    sema_errs   = _collect(diags.sema, filter_stdlib=True)   # filter stdlib false positives
+    sema_errs = _collect(
+        diags.sema,
+        filter_stdlib=filter_stdlib_diagnostics,
+    )
     warn_items  = _collect(diags.warnings)
 
     has_errors = bool(parser_errs or sema_errs)

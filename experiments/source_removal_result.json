@@ -1,0 +1,763 @@
+{
+ "code_commit": "cdda5f2",
+ "inputs": [
+  "examples/output/run3_authoritative_20260831/final_model.sysml",
+  "examples/output/run3_authoritative_20260831/gazebo_feasibility_latest.json",
+  "examples/output/run3_authoritative_20260831/realization_per_requirement_rebuilt.json",
+  "examples/output/run3_authoritative_20260831/run_report.json",
+  "examples/output/run3_authoritative_20260831/sitl_l2_final_7of7.json"
+ ],
+ "baseline": {
+  "status": {
+   "REQ-CONS-001": "verified",
+   "REQ-CONS-002": "out-of-sim-scope",
+   "REQ-CONS-003": "verified",
+   "REQ-CONS-004": "out-of-sim-scope",
+   "REQ-FUNC-001": "partial",
+   "REQ-FUNC-002": "verified",
+   "REQ-FUNC-003": "verified",
+   "REQ-FUNC-004": "out-of-sim-scope",
+   "REQ-FUNC-005": "verified",
+   "REQ-FUNC-006": "verified",
+   "REQ-FUNC-007": "verified",
+   "REQ-FUNC-008": "partial",
+   "REQ-INTF-001": "out-of-sim-scope",
+   "REQ-INTF-002": "partial",
+   "REQ-INTF-003": "out-of-sim-scope",
+   "REQ-PERF-001": "verified",
+   "REQ-PERF-002": "verified",
+   "REQ-PERF-003": "verified",
+   "REQ-PERF-004": "verified",
+   "REQ-PERF-005": "verified",
+   "REQ-PERF-006": "verified",
+   "REQ-SAFE-001": "partial",
+   "REQ-SAFE-002": "partial",
+   "REQ-SAFE-003": "verified",
+   "REQ-SAFE-004": "blocked",
+   "REQ-SAFE-005": "verified",
+   "REQ-SAFE-006": "partial",
+   "REQ-SAFE-007": "failed",
+   "REQ-SAFE-008": "verified"
+  },
+  "obligations": {
+   "REQ-CONS-001/OBL_REQ_CONS_001_001": "verified",
+   "REQ-CONS-001/OBL_REQ_CONS_001_002": "verified",
+   "REQ-CONS-002/OBL_REQ_CONS_002_001": "out-of-sim-scope",
+   "REQ-CONS-003/OBL_REQ_CONS_003_001": "verified",
+   "REQ-CONS-003/OBL_REQ_CONS_003_002": "verified",
+   "REQ-CONS-004/OBL_REQ_CONS_004_001": "out-of-sim-scope",
+   "REQ-FUNC-001/OBL_REQ_FUNC_001_001": "verified",
+   "REQ-FUNC-001/OBL_REQ_FUNC_001_002": "planned",
+   "REQ-FUNC-002/OBL_REQ_FUNC_002_001": "verified",
+   "REQ-FUNC-002/OBL_REQ_FUNC_002_002": "verified",
+   "REQ-FUNC-002/OBL_REQ_FUNC_002_003": "verified",
+   "REQ-FUNC-002/OBL_REQ_FUNC_002_004": "verified",
+   "REQ-FUNC-003/OBL_REQ_FUNC_003_001": "verified",
+   "REQ-FUNC-003/OBL_REQ_FUNC_003_002": "verified",
+   "REQ-FUNC-003/OBL_REQ_FUNC_003_003": "verified",
+   "REQ-FUNC-003/OBL_REQ_FUNC_003_004": "verified",
+   "REQ-FUNC-004/OBL_REQ_FUNC_004_001": "out-of-sim-scope",
+   "REQ-FUNC-005/OBL_REQ_FUNC_005_001": "verified",
+   "REQ-FUNC-005/OBL_REQ_FUNC_005_002": "verified",
+   "REQ-FUNC-006/OBL_REQ_FUNC_006_001": "verified",
+   "REQ-FUNC-006/OBL_REQ_FUNC_006_002": "verified",
+   "REQ-FUNC-007/OBL_REQ_FUNC_007_001": "verified",
+   "REQ-FUNC-008/OBL_REQ_FUNC_008_001": "verified",
+   "REQ-FUNC-008/OBL_REQ_FUNC_008_002": "unverified",
+   "REQ-INTF-001/OBL_REQ_INTF_001_001": "unverified",
+   "REQ-INTF-001/OBL_REQ_INTF_001_001M": "out-of-sim-scope",
+   "REQ-INTF-002/OBL_REQ_INTF_002_001": "unverified",
+   "REQ-INTF-003/OBL_REQ_INTF_003_001": "out-of-sim-scope",
+   "REQ-PERF-001/OBL_REQ_PERF_001_001": "verified",
+   "REQ-PERF-001/OBL_REQ_PERF_001_002": "verified",
+   "REQ-PERF-002/OBL_REQ_PERF_002_001": "verified",
+   "REQ-PERF-002/OBL_REQ_PERF_002_002": "verified",
+   "REQ-PERF-003/OBL_REQ_PERF_003_001": "verified",
+   "REQ-PERF-003/OBL_REQ_PERF_003_002": "verified",
+   "REQ-PERF-004/OBL_REQ_PERF_004_001": "verified",
+   "REQ-PERF-004/OBL_REQ_PERF_004_002": "verified",
+   "REQ-PERF-004/OBL_REQ_PERF_004_003": "verified",
+   "REQ-PERF-005/OBL_REQ_PERF_005_001": "verified",
+   "REQ-PERF-005/OBL_REQ_PERF_005_002": "verified",
+   "REQ-PERF-006/OBL_REQ_PERF_006_001": "verified",
+   "REQ-PERF-006/OBL_REQ_PERF_006_002": "verified",
+   "REQ-SAFE-001/OBL_REQ_SAFE_001_001": "verified",
+   "REQ-SAFE-001/OBL_REQ_SAFE_001_002": "verified",
+   "REQ-SAFE-001/OBL_REQ_SAFE_001_003": "unverified",
+   "REQ-SAFE-002/OBL_REQ_SAFE_002_001": "verified",
+   "REQ-SAFE-002/OBL_REQ_SAFE_002_002": "verified",
+   "REQ-SAFE-002/OBL_REQ_SAFE_002_003": "unverified",
+   "REQ-SAFE-003/OBL_REQ_SAFE_003_001": "verified",
+   "REQ-SAFE-003/OBL_REQ_SAFE_003_002": "verified",
+   "REQ-SAFE-004/OBL_REQ_SAFE_004_001": "blocked",
+   "REQ-SAFE-005/OBL_REQ_SAFE_005_001": "verified",
+   "REQ-SAFE-005/OBL_REQ_SAFE_005_002": "verified",
+   "REQ-SAFE-005/OBL_REQ_SAFE_005_003": "verified",
+   "REQ-SAFE-006/OBL_REQ_SAFE_006_001": "verified",
+   "REQ-SAFE-007/OBL_REQ_SAFE_007_001": "failed",
+   "REQ-SAFE-008/OBL_REQ_SAFE_008_001": "verified"
+  },
+  "summary": {
+   "total": 29,
+   "by_status": {
+    "blocked": 1,
+    "failed": 1,
+    "out-of-sim-scope": 5,
+    "partial": 6,
+    "verified": 16
+   },
+   "by_tier": {
+    "behavioral_sim": 10,
+    "datasheet": 3,
+    "forward_flight": 2,
+    "gazebo": 8,
+    "gazebo_deferred": 3,
+    "gazebo_failed": 1,
+    "gazebo_partial": 1,
+    "inspection_analysis": 5,
+    "l1_param": 7,
+    "l2_sitl": 7
+   },
+   "unassigned_req_ids": [],
+   "evidence_input_missing_req_ids": [],
+   "obligations_total": 56,
+   "obligations_verified": 43,
+   "obligations_out_of_sim_scope": 5,
+   "obligations_in_sim_scope": 51,
+   "out_of_sim_scope_by_rule": {
+    "cryptography": [
+     "REQ_FUNC_004",
+     "REQ_INTF_001"
+    ],
+    "enclosure_ingress": [
+     "REQ_CONS_002"
+    ],
+    "regulatory_conformance": [
+     "REQ_CONS_004",
+     "REQ_INTF_003"
+    ]
+   },
+   "out_of_sim_scope_corroborated_by_requirement": [
+    "REQ_CONS_002",
+    "REQ_CONS_004",
+    "REQ_INTF_003"
+   ],
+   "out_of_sim_scope_without_a_rule": []
+  }
+ },
+ "variants": {
+  "catalogue calculations": {
+   "status": {
+    "REQ-CONS-001": "verified",
+    "REQ-CONS-002": "out-of-sim-scope",
+    "REQ-CONS-003": "unassigned",
+    "REQ-CONS-004": "out-of-sim-scope",
+    "REQ-FUNC-001": "partial",
+    "REQ-FUNC-002": "verified",
+    "REQ-FUNC-003": "verified",
+    "REQ-FUNC-004": "out-of-sim-scope",
+    "REQ-FUNC-005": "verified",
+    "REQ-FUNC-006": "verified",
+    "REQ-FUNC-007": "verified",
+    "REQ-FUNC-008": "partial",
+    "REQ-INTF-001": "out-of-sim-scope",
+    "REQ-INTF-002": "partial",
+    "REQ-INTF-003": "out-of-sim-scope",
+    "REQ-PERF-001": "verified",
+    "REQ-PERF-002": "unassigned",
+    "REQ-PERF-003": "verified",
+    "REQ-PERF-004": "verified",
+    "REQ-PERF-005": "verified",
+    "REQ-PERF-006": "unassigned",
+    "REQ-SAFE-001": "partial",
+    "REQ-SAFE-002": "partial",
+    "REQ-SAFE-003": "verified",
+    "REQ-SAFE-004": "blocked",
+    "REQ-SAFE-005": "verified",
+    "REQ-SAFE-006": "partial",
+    "REQ-SAFE-007": "failed",
+    "REQ-SAFE-008": "verified"
+   },
+   "summary": {
+    "total": 29,
+    "by_status": {
+     "blocked": 1,
+     "failed": 1,
+     "out-of-sim-scope": 5,
+     "partial": 6,
+     "unassigned": 3,
+     "verified": 13
+    },
+    "by_tier": {
+     "behavioral_sim": 10,
+     "gazebo": 8,
+     "gazebo_deferred": 3,
+     "gazebo_failed": 1,
+     "gazebo_partial": 1,
+     "inspection_analysis": 5,
+     "l1_param": 7,
+     "l2_sitl": 7
+    },
+    "unassigned_req_ids": [
+     "REQ_CONS_003",
+     "REQ_PERF_002",
+     "REQ_PERF_006"
+    ],
+    "evidence_input_missing_req_ids": [],
+    "obligations_total": 56,
+    "obligations_verified": 37,
+    "obligations_out_of_sim_scope": 5,
+    "obligations_in_sim_scope": 51,
+    "out_of_sim_scope_by_rule": {
+     "cryptography": [
+      "REQ_FUNC_004",
+      "REQ_INTF_001"
+     ],
+     "enclosure_ingress": [
+      "REQ_CONS_002"
+     ],
+     "regulatory_conformance": [
+      "REQ_CONS_004",
+      "REQ_INTF_003"
+     ]
+    },
+    "out_of_sim_scope_corroborated_by_requirement": [
+     "REQ_CONS_002",
+     "REQ_CONS_004",
+     "REQ_INTF_003"
+    ],
+    "out_of_sim_scope_without_a_rule": []
+   },
+   "changed_requirements": {
+    "REQ-CONS-003": [
+     "verified",
+     "unassigned"
+    ],
+    "REQ-PERF-002": [
+     "verified",
+     "unassigned"
+    ],
+    "REQ-PERF-006": [
+     "verified",
+     "unassigned"
+    ]
+   },
+   "changed_obligations": {
+    "REQ-CONS-003/OBL_REQ_CONS_003_001": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-CONS-003/OBL_REQ_CONS_003_002": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-PERF-002/OBL_REQ_PERF_002_001": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-PERF-002/OBL_REQ_PERF_002_002": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-PERF-006/OBL_REQ_PERF_006_001": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-PERF-006/OBL_REQ_PERF_006_002": [
+     "verified",
+     "unverified"
+    ]
+   },
+   "counts": {
+    "verified": 13,
+    "out-of-sim-scope": 5,
+    "unassigned": 3,
+    "partial": 6,
+    "blocked": 1,
+    "failed": 1
+   }
+  },
+  "behavioural execution": {
+   "status": {
+    "REQ-CONS-001": "verified",
+    "REQ-CONS-002": "out-of-sim-scope",
+    "REQ-CONS-003": "verified",
+    "REQ-CONS-004": "out-of-sim-scope",
+    "REQ-FUNC-001": "planned",
+    "REQ-FUNC-002": "verified",
+    "REQ-FUNC-003": "verified",
+    "REQ-FUNC-004": "out-of-sim-scope",
+    "REQ-FUNC-005": "verified",
+    "REQ-FUNC-006": "verified",
+    "REQ-FUNC-007": "unassigned",
+    "REQ-FUNC-008": "unassigned",
+    "REQ-INTF-001": "out-of-sim-scope",
+    "REQ-INTF-002": "partial",
+    "REQ-INTF-003": "out-of-sim-scope",
+    "REQ-PERF-001": "verified",
+    "REQ-PERF-002": "verified",
+    "REQ-PERF-003": "verified",
+    "REQ-PERF-004": "verified",
+    "REQ-PERF-005": "verified",
+    "REQ-PERF-006": "verified",
+    "REQ-SAFE-001": "partial",
+    "REQ-SAFE-002": "partial",
+    "REQ-SAFE-003": "partial",
+    "REQ-SAFE-004": "blocked",
+    "REQ-SAFE-005": "verified",
+    "REQ-SAFE-006": "partial",
+    "REQ-SAFE-007": "failed",
+    "REQ-SAFE-008": "partial"
+   },
+   "summary": {
+    "total": 29,
+    "by_status": {
+     "blocked": 1,
+     "failed": 1,
+     "out-of-sim-scope": 5,
+     "partial": 6,
+     "planned": 1,
+     "unassigned": 2,
+     "verified": 13
+    },
+    "by_tier": {
+     "datasheet": 3,
+     "forward_flight": 2,
+     "gazebo": 8,
+     "gazebo_deferred": 3,
+     "gazebo_failed": 1,
+     "gazebo_partial": 1,
+     "inspection_analysis": 5,
+     "l1_param": 7,
+     "l2_sitl": 7
+    },
+    "unassigned_req_ids": [
+     "REQ_FUNC_007",
+     "REQ_FUNC_008"
+    ],
+    "evidence_input_missing_req_ids": [],
+    "obligations_total": 56,
+    "obligations_verified": 35,
+    "obligations_out_of_sim_scope": 5,
+    "obligations_in_sim_scope": 51,
+    "out_of_sim_scope_by_rule": {
+     "cryptography": [
+      "REQ_FUNC_004",
+      "REQ_INTF_001"
+     ],
+     "enclosure_ingress": [
+      "REQ_CONS_002"
+     ],
+     "regulatory_conformance": [
+      "REQ_CONS_004",
+      "REQ_INTF_003"
+     ]
+    },
+    "out_of_sim_scope_corroborated_by_requirement": [
+     "REQ_CONS_002",
+     "REQ_CONS_004",
+     "REQ_INTF_003"
+    ],
+    "out_of_sim_scope_without_a_rule": []
+   },
+   "changed_requirements": {
+    "REQ-FUNC-001": [
+     "partial",
+     "planned"
+    ],
+    "REQ-FUNC-007": [
+     "verified",
+     "unassigned"
+    ],
+    "REQ-FUNC-008": [
+     "partial",
+     "unassigned"
+    ],
+    "REQ-SAFE-003": [
+     "verified",
+     "partial"
+    ],
+    "REQ-SAFE-008": [
+     "verified",
+     "partial"
+    ]
+   },
+   "changed_obligations": {
+    "REQ-FUNC-001/OBL_REQ_FUNC_001_001": [
+     "verified",
+     "planned"
+    ],
+    "REQ-FUNC-007/OBL_REQ_FUNC_007_001": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-FUNC-008/OBL_REQ_FUNC_008_001": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-SAFE-001/OBL_REQ_SAFE_001_001": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-SAFE-002/OBL_REQ_SAFE_002_001": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-SAFE-003/OBL_REQ_SAFE_003_002": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-SAFE-006/OBL_REQ_SAFE_006_001": [
+     "verified",
+     "partial"
+    ],
+    "REQ-SAFE-008/OBL_REQ_SAFE_008_001": [
+     "verified",
+     "unverified"
+    ]
+   },
+   "counts": {
+    "verified": 13,
+    "out-of-sim-scope": 5,
+    "planned": 1,
+    "unassigned": 2,
+    "partial": 6,
+    "blocked": 1,
+    "failed": 1
+   }
+  },
+  "SITL": {
+   "status": {
+    "REQ-CONS-001": "planned",
+    "REQ-CONS-002": "out-of-sim-scope",
+    "REQ-CONS-003": "verified",
+    "REQ-CONS-004": "out-of-sim-scope",
+    "REQ-FUNC-001": "partial",
+    "REQ-FUNC-002": "partial",
+    "REQ-FUNC-003": "verified",
+    "REQ-FUNC-004": "out-of-sim-scope",
+    "REQ-FUNC-005": "partial",
+    "REQ-FUNC-006": "partial",
+    "REQ-FUNC-007": "verified",
+    "REQ-FUNC-008": "partial",
+    "REQ-INTF-001": "out-of-sim-scope",
+    "REQ-INTF-002": "planned",
+    "REQ-INTF-003": "out-of-sim-scope",
+    "REQ-PERF-001": "partial",
+    "REQ-PERF-002": "verified",
+    "REQ-PERF-003": "partial",
+    "REQ-PERF-004": "verified",
+    "REQ-PERF-005": "verified",
+    "REQ-PERF-006": "verified",
+    "REQ-SAFE-001": "partial",
+    "REQ-SAFE-002": "partial",
+    "REQ-SAFE-003": "partial",
+    "REQ-SAFE-004": "blocked",
+    "REQ-SAFE-005": "partial",
+    "REQ-SAFE-006": "partial",
+    "REQ-SAFE-007": "failed",
+    "REQ-SAFE-008": "partial"
+   },
+   "summary": {
+    "total": 29,
+    "by_status": {
+     "blocked": 1,
+     "failed": 1,
+     "out-of-sim-scope": 5,
+     "partial": 13,
+     "planned": 2,
+     "verified": 7
+    },
+    "by_tier": {
+     "behavioral_sim": 10,
+     "datasheet": 3,
+     "forward_flight": 2,
+     "gazebo": 8,
+     "gazebo_deferred": 3,
+     "gazebo_failed": 1,
+     "gazebo_partial": 1,
+     "inspection_analysis": 5,
+     "l1_param_planned": 7,
+     "l2_sitl_planned": 7
+    },
+    "unassigned_req_ids": [],
+    "evidence_input_missing_req_ids": [],
+    "obligations_total": 56,
+    "obligations_verified": 39,
+    "obligations_out_of_sim_scope": 5,
+    "obligations_in_sim_scope": 51,
+    "out_of_sim_scope_by_rule": {
+     "cryptography": [
+      "REQ_FUNC_004",
+      "REQ_INTF_001"
+     ],
+     "enclosure_ingress": [
+      "REQ_CONS_002"
+     ],
+     "regulatory_conformance": [
+      "REQ_CONS_004",
+      "REQ_INTF_003"
+     ]
+    },
+    "out_of_sim_scope_corroborated_by_requirement": [
+     "REQ_CONS_002",
+     "REQ_CONS_004",
+     "REQ_INTF_003"
+    ],
+    "out_of_sim_scope_without_a_rule": []
+   },
+   "changed_requirements": {
+    "REQ-CONS-001": [
+     "verified",
+     "planned"
+    ],
+    "REQ-FUNC-002": [
+     "verified",
+     "partial"
+    ],
+    "REQ-FUNC-005": [
+     "verified",
+     "partial"
+    ],
+    "REQ-FUNC-006": [
+     "verified",
+     "partial"
+    ],
+    "REQ-INTF-002": [
+     "partial",
+     "planned"
+    ],
+    "REQ-PERF-001": [
+     "verified",
+     "partial"
+    ],
+    "REQ-PERF-003": [
+     "verified",
+     "partial"
+    ],
+    "REQ-SAFE-003": [
+     "verified",
+     "partial"
+    ],
+    "REQ-SAFE-005": [
+     "verified",
+     "partial"
+    ],
+    "REQ-SAFE-008": [
+     "verified",
+     "partial"
+    ]
+   },
+   "changed_obligations": {
+    "REQ-CONS-001/OBL_REQ_CONS_001_001": [
+     "verified",
+     "planned"
+    ],
+    "REQ-CONS-001/OBL_REQ_CONS_001_002": [
+     "verified",
+     "planned"
+    ],
+    "REQ-FUNC-006/OBL_REQ_FUNC_006_001": [
+     "verified",
+     "planned"
+    ],
+    "REQ-FUNC-006/OBL_REQ_FUNC_006_002": [
+     "verified",
+     "planned"
+    ]
+   },
+   "counts": {
+    "planned": 2,
+    "out-of-sim-scope": 5,
+    "verified": 7,
+    "partial": 13,
+    "blocked": 1,
+    "failed": 1
+   }
+  },
+  "Gazebo": {
+   "status": {
+    "REQ-CONS-001": "verified",
+    "REQ-CONS-002": "out-of-sim-scope",
+    "REQ-CONS-003": "verified",
+    "REQ-CONS-004": "out-of-sim-scope",
+    "REQ-FUNC-001": "partial",
+    "REQ-FUNC-002": "partial",
+    "REQ-FUNC-003": "partial",
+    "REQ-FUNC-004": "out-of-sim-scope",
+    "REQ-FUNC-005": "partial",
+    "REQ-FUNC-006": "verified",
+    "REQ-FUNC-007": "verified",
+    "REQ-FUNC-008": "partial",
+    "REQ-INTF-001": "out-of-sim-scope",
+    "REQ-INTF-002": "partial",
+    "REQ-INTF-003": "out-of-sim-scope",
+    "REQ-PERF-001": "partial",
+    "REQ-PERF-002": "verified",
+    "REQ-PERF-003": "verified",
+    "REQ-PERF-004": "planned",
+    "REQ-PERF-005": "planned",
+    "REQ-PERF-006": "verified",
+    "REQ-SAFE-001": "partial",
+    "REQ-SAFE-002": "partial",
+    "REQ-SAFE-003": "verified",
+    "REQ-SAFE-004": "blocked",
+    "REQ-SAFE-005": "partial",
+    "REQ-SAFE-006": "verified",
+    "REQ-SAFE-007": "planned",
+    "REQ-SAFE-008": "verified"
+   },
+   "summary": {
+    "total": 29,
+    "by_status": {
+     "blocked": 1,
+     "out-of-sim-scope": 5,
+     "partial": 10,
+     "planned": 3,
+     "verified": 10
+    },
+    "by_tier": {
+     "behavioral_sim": 10,
+     "datasheet": 3,
+     "forward_flight": 2,
+     "gazebo_deferred": 6,
+     "inspection_analysis": 5,
+     "l1_param": 7,
+     "l2_sitl": 7
+    },
+    "unassigned_req_ids": [],
+    "evidence_input_missing_req_ids": [],
+    "obligations_total": 56,
+    "obligations_verified": 30,
+    "obligations_out_of_sim_scope": 5,
+    "obligations_in_sim_scope": 51,
+    "out_of_sim_scope_by_rule": {
+     "cryptography": [
+      "REQ_FUNC_004",
+      "REQ_INTF_001"
+     ],
+     "enclosure_ingress": [
+      "REQ_CONS_002"
+     ],
+     "regulatory_conformance": [
+      "REQ_CONS_004",
+      "REQ_INTF_003"
+     ]
+    },
+    "out_of_sim_scope_corroborated_by_requirement": [
+     "REQ_CONS_002",
+     "REQ_CONS_004",
+     "REQ_INTF_003"
+    ],
+    "out_of_sim_scope_without_a_rule": []
+   },
+   "changed_requirements": {
+    "REQ-FUNC-002": [
+     "verified",
+     "partial"
+    ],
+    "REQ-FUNC-003": [
+     "verified",
+     "partial"
+    ],
+    "REQ-FUNC-005": [
+     "verified",
+     "partial"
+    ],
+    "REQ-PERF-001": [
+     "verified",
+     "partial"
+    ],
+    "REQ-PERF-004": [
+     "verified",
+     "planned"
+    ],
+    "REQ-PERF-005": [
+     "verified",
+     "planned"
+    ],
+    "REQ-SAFE-005": [
+     "verified",
+     "partial"
+    ],
+    "REQ-SAFE-006": [
+     "partial",
+     "verified"
+    ],
+    "REQ-SAFE-007": [
+     "failed",
+     "planned"
+    ]
+   },
+   "changed_obligations": {
+    "REQ-FUNC-001/OBL_REQ_FUNC_001_002": [
+     "planned",
+     "unverified"
+    ],
+    "REQ-FUNC-002/OBL_REQ_FUNC_002_001": [
+     "verified",
+     "planned"
+    ],
+    "REQ-FUNC-003/OBL_REQ_FUNC_003_004": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-FUNC-005/OBL_REQ_FUNC_005_001": [
+     "verified",
+     "planned"
+    ],
+    "REQ-FUNC-005/OBL_REQ_FUNC_005_002": [
+     "verified",
+     "planned"
+    ],
+    "REQ-PERF-001/OBL_REQ_PERF_001_001": [
+     "verified",
+     "unverified"
+    ],
+    "REQ-PERF-004/OBL_REQ_PERF_004_001": [
+     "verified",
+     "planned"
+    ],
+    "REQ-PERF-004/OBL_REQ_PERF_004_002": [
+     "verified",
+     "planned"
+    ],
+    "REQ-PERF-004/OBL_REQ_PERF_004_003": [
+     "verified",
+     "planned"
+    ],
+    "REQ-PERF-005/OBL_REQ_PERF_005_001": [
+     "verified",
+     "planned"
+    ],
+    "REQ-PERF-005/OBL_REQ_PERF_005_002": [
+     "verified",
+     "planned"
+    ],
+    "REQ-SAFE-005/OBL_REQ_SAFE_005_001": [
+     "verified",
+     "planned"
+    ],
+    "REQ-SAFE-005/OBL_REQ_SAFE_005_002": [
+     "verified",
+     "planned"
+    ],
+    "REQ-SAFE-005/OBL_REQ_SAFE_005_003": [
+     "verified",
+     "planned"
+    ],
+    "REQ-SAFE-007/OBL_REQ_SAFE_007_001": [
+     "failed",
+     "planned"
+    ]
+   },
+   "counts": {
+    "verified": 10,
+    "out-of-sim-scope": 5,
+    "partial": 10,
+    "planned": 3,
+    "blocked": 1
+   }
+  }
+ }
+}

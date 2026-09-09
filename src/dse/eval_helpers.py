@@ -18,6 +18,9 @@ except ModuleNotFoundError:
     _HAS_NX = False
 
 
+# Lexical heuristic: identifies a sensor by the wording of its type name.
+# A sensor typed `ForwardUnit` is invisible here - a limit of the check,
+# not of the model.
 _SENSOR_USAGE_RE = re.compile(
     r"\bpart\s+(\w+)\s*:\s*\w*"
     r"(?:Sensor|Perception|Detector|Camera|Lidar|IMU|GPS|Radar)\w*\s*;",
@@ -26,26 +29,20 @@ _SENSOR_USAGE_RE = re.compile(
 
 
 def _sysml_text(model: SysMLModel) -> str:
-    """Return the stored SysML text from model metadata (reliable source)."""
     return (getattr(model, "metadata", None) or {}).get("last_sysml_text", "")
 
 
 def _build_connection_graph(text: str):
-    """
-    Build a directed graph of part-instance connections from SysML text.
+    from src.simulation.connectivity_fixer import parse_connects
 
-    Nodes are part instance names; edges represent connect statements.
-    Self-loops are skipped.  Returns a networkx DiGraph when available,
-    otherwise a pure-Python shim with the same interface.
-    """
     edge_list: List[Tuple[str, str]] = []
-    for m in re.finditer(
-        r"\bconnect\s+(\w+)\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
-    ):
-        src = m.group(1)
-        tgt = m.group(3)
-        if src != tgt:
-            edge_list.append((src, tgt))
+    try:
+        statements = parse_connects(text)
+    except Exception:
+        statements = []
+    for stmt in statements:
+        if stmt.src_inst != stmt.tgt_inst:
+            edge_list.append((stmt.src_inst, stmt.tgt_inst))
 
     if _HAS_NX:
         g = nx.DiGraph()
@@ -67,9 +64,6 @@ def _build_connection_graph(text: str):
 
         def edges(self) -> List[Tuple[str, str]]:
             return [(u, v) for u, vs in self._succ.items() for v in vs]
-
-        def in_degree(self, node: str) -> int:
-            return len(self._pred.get(node, set()))
 
         def weakly_connected_components(self) -> List[Set[str]]:
             visited: Set[str] = set()
@@ -94,35 +88,10 @@ def _build_connection_graph(text: str):
                 components.append(comp)
             return components
 
-        def simple_cycles(self) -> List[List[str]]:
-            cycles: List[List[str]] = []
-            visited: Set[str] = set()
-            path: List[str] = []
-            path_set: Set[str] = set()
-
-            def dfs(node: str) -> None:
-                visited.add(node)
-                path.append(node)
-                path_set.add(node)
-                for nb in self._succ.get(node, set()):
-                    if nb not in visited:
-                        dfs(nb)
-                    elif nb in path_set:
-                        idx = path.index(nb)
-                        cycles.append(path[idx:])
-                path.pop()
-                path_set.discard(node)
-
-            for n in list(self._succ):
-                if n not in visited:
-                    dfs(n)
-            return cycles
-
     return _PureDiGraph(edge_list)
 
 
 def _build_port_type_map(model: SysMLModel) -> Dict[str, str]:
-    """Returns {port_name: type_ref_name} built from all PartDefinition.ports."""
     mapping: Dict[str, str] = {}
     for part in model.part_definitions:
         for port in part.ports:
@@ -138,3 +107,27 @@ def _satisfied_req_ids(model: SysMLModel) -> set:
         for sr in part.satisfy_relationships
         if sr.target and sr.target.name
     }
+
+
+def _has_numeric_unit_attr(part, syside_attr_map) -> bool:  # noqa: ANN001
+    """True when a part carries at least one numeric attribute with a unit.
+
+    Shared by the evaluator's attribute-coverage dimension and the diagnostics' PERF/CONS
+    check; it was duplicated in both, so a fix to one reader did not reach the other while
+    both fed the same score (moving requirement_coverage by 0.1172 when only one
+    denominator was corrected).
+    """
+    for a in part.attributes:
+        val  = getattr(a, "default_value", None)
+        unit = getattr(a, "unit", None)
+        if val and unit:
+            try:
+                float(str(val).replace(",", "."))
+                return True
+            except (TypeError, ValueError):
+                pass
+        # Fallback: syside evaluated this attribute to a concrete float
+        # (catches expressions like `= mass * g` the IR parser left as str)
+        if a.name in syside_attr_map:
+            return True
+    return False

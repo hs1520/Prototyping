@@ -1,0 +1,49 @@
+{
+  "summary": {
+    "total": 29,
+    "by_status": {
+      "blocked": 1,
+      "failed": 1,
+      "out-of-sim-scope": 5,
+      "partial": 6,
+      "verified": 16
+    },
+    "by_tier": {
+      "behavioral_sim": 10,
+      "datasheet": 3,
+      "forward_flight": 2,
+      "gazebo": 8,
+      "gazebo_deferred": 3,
+      "gazebo_failed": 1,
+      "gazebo_partial": 1,
+      "inspection_analysis": 5,
+      "l1_param": 7,
+      "l2_sitl": 7
+    },
+    "unassigned_req_ids": [],
+    "evidence_input_missing_req_ids": [],
+    "obligations_total": 56,
+    "obligations_verified": 43,
+    "obligations_out_of_sim_scope": 5,
+    "obligations_in_sim_scope": 51,
+    "out_of_sim_scope_by_rule": {
+      "cryptography": [
+        "REQ_FUNC_004",
+        "REQ_INTF_001"
+      ],
+      "enclosure_ingress": [
+        "REQ_CONS_002"
+      ],
+      "regulatory_conformance": [
+        "REQ_CONS_004",
+        "REQ_INTF_003"
+      ]
+    },
+    "out_of_sim_scope_corroborated_by_requirement": [
+      "REQ_CONS_002",
+      "REQ_CONS_004",
+      "REQ_INTF_003"
+    ],
+    "out_of_sim_scope_without_a_rule": []
+  }
+}

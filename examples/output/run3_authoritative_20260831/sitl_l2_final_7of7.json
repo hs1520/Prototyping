@@ -1,0 +1,85 @@
+{
+  "speedup": 5.0,
+  "wall_total_s": 178.2,
+  "l1_results": [
+    {
+      "req_id": "REQ_FUNC_002",
+      "passed": true,
+      "message": "WPNAV_SPEED=1800"
+    },
+    {
+      "req_id": "REQ_PERF_003",
+      "passed": true,
+      "message": "WPNAV_SPEED=1800"
+    },
+    {
+      "req_id": "REQ_SAFE_002",
+      "passed": true,
+      "message": "BATT_FS_CRT_PCT=15.0, BATT_FS_CRT_ACT=1"
+    },
+    {
+      "req_id": "REQ_INTF_002",
+      "passed": true,
+      "message": "GPS_INJECT_TO=127"
+    },
+    {
+      "req_id": "REQ_CONS_001",
+      "passed": true,
+      "message": "FENCE_ENABLE=1, FENCE_ALT_MAX=120.0"
+    },
+    {
+      "req_id": "REQ_SAFE_001",
+      "passed": true,
+      "message": "BATT_FS_LOW_PCT=25.0, BATT_FS_LOW_ACT=2"
+    },
+    {
+      "req_id": "REQ_PERF_001",
+      "passed": true,
+      "message": "WPNAV_SPEED=1800"
+    }
+  ],
+  "results": [
+    {
+      "req_id": "REQ_SAFE_008",
+      "passed": true,
+      "message": "servo7_raw=1000 within 1000±50",
+      "duration_s": 19.8
+    },
+    {
+      "req_id": "REQ_SAFE_006",
+      "passed": true,
+      "message": "servo7_raw=1000 within 1000±50",
+      "duration_s": 24.7
+    },
+    {
+      "req_id": "REQ_SAFE_005",
+      "passed": true,
+      "message": "servo8_raw=2000 within 2000±50",
+      "duration_s": 27.7
+    },
+    {
+      "req_id": "REQ_CONS_001",
+      "passed": true,
+      "message": "模式已切换到 RTL",
+      "duration_s": 27.1
+    },
+    {
+      "req_id": "REQ_SAFE_003",
+      "passed": true,
+      "message": "模式已切换到 LAND",
+      "duration_s": 29.2
+    },
+    {
+      "req_id": "REQ_FUNC_006",
+      "passed": true,
+      "message": "the revised coordinate became the active navigation-controller target 0.200 s after MISSION_ACK (limit 1.000 s), reported 0.58 m from the commanded coordinate; the controller had been steering 91.26 m away before the revision, so the move is unambiguous. Mission storage revision seen=True; transfer took 3.500 s and is excluded. POSITION_TARGET_GLOBAL_INT is the active navigation-controller target; MISSION_ITEM_INT is mission storage only. Adoption is judged within 2.0 m because the controller reports its own target through an EKF-origin round trip, never the commanded integers",
+      "duration_s": 24.8
+    },
+    {
+      "req_id": "REQ_FUNC_005",
+      "passed": true,
+      "message": "servo7_raw=1000 within 1000±50",
+      "duration_s": 24.8
+    }
+  ]
+}

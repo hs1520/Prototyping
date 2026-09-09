@@ -1,33 +1,10 @@
-"""
-Autonomous Drone System Prototyping — v2 (Industry-grade input).
+"""Autonomous Drone System Prototyping - v2 requirement input."""
 
-Demonstrates improved system description and requirements that follow
-INCOSE-style requirement authoring principles:
-  • Atomic, verifiable "shall" statements
-  • Quantified performance targets
-  • Safety requirements ordered by priority with explicit trigger conditions
-  • Interface requirements reference standards by name and purpose,
-    not by implementation mechanism
-  • No implementation-prescriptive language (no boolean flags, no state-machine
-    sequences, no protocol wire formats in functional requirements)
-
-Usage:
-    python examples/drone_system_v2.py
-"""
-
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.prototyping.pipeline import PrototypingPipeline
+from src.app.pipeline import PrototypingPipeline
 from src.prototyping.provider_factory import create_llm
+from src.prototyping.requirement_inputs import build_frozen_requirement_set
 from src.sitl.sitl_bridge import ARDUPILOT_COPTER_PROFILE
 
-
-# ---------------------------------------------------------------------------
-# System description — structured by domain, problem-space only
-# ---------------------------------------------------------------------------
 
 DRONE_DESCRIPTION = """
 System: AutonomousDrone — Urban Last-Mile Delivery UAS
@@ -58,7 +35,7 @@ MISSION PROFILE
 
 PAYLOAD HANDLING
 ────────────────
-  • Capacity         : up to 2.5 kg gross payload mass
+  • Capacity         : up to 1.5 kg gross payload mass
   • Release actuator : mechanically locked by default; released under
                        flight-computer command when delivery conditions are met
   • Delivery trigger : geographic position within 1.0 m of the target waypoint
@@ -128,20 +105,33 @@ PHYSICAL AND REGULATORY CONSTRAINTS
 
 
 # ---------------------------------------------------------------------------
-# Additional requirements — INCOSE-style, atomic, measurable
+# Additional requirements - INCOSE-style, atomic, measurable (v2).
+# The CLOSED verdict scopes only endurance>= and mtow<=, and v1's 25 kg MTOW
+# never bound, so closure rested on one requirement. v2 binds both (endurance
+# 20->25 min, MTOW 25->8 kg); 25 min recreates the lumped ~18 min INFEASIBLE
+# vs datasheet 31.8 min CLOSED contrast. Also fixes PERF-003 direction,
+# FUNC-003 wording, adds an operational-range requirement, tags [V:] items.
 # ---------------------------------------------------------------------------
 
 DRONE_REQUIREMENTS = [
-    # ── Functional ────────────────────────────────────────────────────────
+    # ── Functional ─────────────────────────────────────────────────────
+    # v1: CEP < 1.0 m. Navigation accuracy is not verifiable in native SITL or the
+    # datasheet/forward-flight tiers, so the method is tagged, not left unassigned.
     "REQ-FUNC-001: The system shall autonomously navigate to designated GPS "
-    "waypoints with a circular error probable (CEP) of less than 1.0 metre.",
+    "waypoints with a circular error probable (CEP) of less than 1.0 metre. "
+    "[V: hardware-in-the-loop / field survey]",
 
-    "REQ-FUNC-002: The system shall detect potential collision threats within a "
-    "15-metre sensor range and initiate an avoidance manoeuvre before the "
-    "separation distance falls below 5 metres.",
+    "REQ-FUNC-002: When approaching a stationary collision threat directly ahead "
+    "within the forward sensor field of view at a closing speed no greater than "
+    "1.5 m/s, the system shall execute an avoidance manoeuvre following threat "
+    "detection no later than 15 metres, maintaining an airframe-to-obstacle "
+    "separation of at least 5 metres.",
 
+    # v1 CHANGE: "without degradation of flight stability or navigation accuracy"
+    # was unfalsifiable -> measurable hover-margin + attitude bound.
     "REQ-FUNC-003: The system shall transport payloads with a gross mass of up "
-    "to 2.5 kg without degradation of flight stability or navigation accuracy.",
+    "to 1.5 kg while maintaining a hover throttle margin of at least 30 percent "
+    "and roll and pitch RMS within 1.0 degree.",
 
     "REQ-FUNC-004: The system shall maintain a continuously encrypted "
     "bidirectional data link with the GCS for telemetry upload and mission "
@@ -155,19 +145,30 @@ DRONE_REQUIREMENTS = [
     "into the active flight plan within 1.0 second of receiving a valid "
     "waypoint-modification command from the GCS.",
 
+    # v1 CHANGE: "any contingency that does not require immediate landing" was
+    # ambiguous -> enumerate the triggering conditions.
     "REQ-FUNC-007: The system shall autonomously execute a return-to-base "
-    "trajectory upon detection of any contingency condition that does not "
-    "require immediate landing.",
+    "trajectory upon detection of a non-critical contingency (GCS link loss, "
+    "geofence breach, or battery state-of-charge at the return threshold) that "
+    "does not require immediate landing.",
 
-    # ── Performance ───────────────────────────────────────────────────────
+    "REQ-FUNC-008: The AutonomousDrone shall transmit a post-flight system "
+    "health report to the GCS within 5.0 seconds of completing an automated "
+    "landing.",
+
     "REQ-PERF-001: The system shall maintain roll and pitch attitude deviations "
-    "within ±0.5° RMS during steady cruise flight at all authorised speeds.",
+    "within 0.5 degree RMS during steady cruise flight at all authorised speeds. "
+    "[V: Gazebo attitude logging / HIL]",
 
+    # v1 CHANGE: 20 -> 25 min. Binding at max payload; recreates the
+    # lumped-INFEASIBLE / datasheet-CLOSED split on the live pipeline.
     "REQ-PERF-002: The system shall sustain flight for a minimum of 25 minutes "
     "when carrying the maximum rated payload at nominal cruise speed.",
 
-    "REQ-PERF-003: The system shall achieve a maximum airspeed of 15 m/s in "
-    "nil-wind, level-flight conditions.",
+    # v1 CHANGE: "maximum airspeed of 15 m/s" read as a floor, never binding ->
+    # capability floor at cruise speed.
+    "REQ-PERF-003: The system shall achieve a cruise airspeed of at least "
+    "18 m/s in nil-wind, level-flight conditions.",
 
     "REQ-PERF-004: The system shall maintain a minimum forward ground speed of "
     "2 m/s when operating in sustained headwinds of up to 15 m/s.",
@@ -176,7 +177,12 @@ DRONE_REQUIREMENTS = [
     "within 2.0 seconds from the moment the delivery coordinate condition is "
     "satisfied.",
 
-    # ── Safety (ordered by ascending priority / trigger threshold) ─────────
+    # v2 NEW: stated operational range. Gives the forward-flight tier a
+    # capability check on speed + range.
+    "REQ-PERF-006: The system shall achieve an operational range of at least "
+    "5 km on a single charge at nominal cruise speed with the maximum rated "
+    "payload.",
+
     "REQ-SAFE-001: The system shall initiate an autonomous return-to-base "
     "sequence when the battery state-of-charge reaches 25%, unless a "
     "higher-priority safety response is already in progress.",
@@ -201,34 +207,66 @@ DRONE_REQUIREMENTS = [
     "locked state whenever a delivery-abort condition is active, regardless "
     "of geographic proximity to the delivery waypoint.",
 
-    # ── Interface ─────────────────────────────────────────────────────────
+    "REQ-SAFE-007: The system shall maintain controlled flight following the "
+    "failure of a single propulsion unit (one motor inoperative).",
+
+    # v2 NEW: was a linker gap; stating it makes the boot servo default (locked)
+    # an SITL-checkable safety requirement.
+    "REQ-SAFE-008: The payload-release actuator shall default to the "
+    "mechanically locked state upon power-on, before any arming or flight "
+    "authorisation.",
+
     "REQ-INTF-001: The system shall exchange telemetry and mission commands "
     "with the GCS using the MAVLink v2.0 protocol over an AES-256 encrypted "
     "RF channel.",
 
     "REQ-INTF-002: The system shall receive and apply differential GNSS "
     "corrections formatted according to the RTCM 10403.3 standard to achieve "
-    "sub-metre positioning accuracy.",
+    "sub-metre positioning accuracy. [V: hardware-in-the-loop / RTK bench]",
 
     "REQ-INTF-003: The system shall broadcast remote identification and "
     "real-time spatial positioning data in accordance with the "
-    "ASTM F3411-22 standard.",
+    "ASTM F3411-22 standard. [V: inspection / conformance test]",
 
-    # ── Constraints ───────────────────────────────────────────────────────
     "REQ-CONS-001: The system shall not exceed a flight altitude of 120 metres "
     "above ground level at any point during normal operations.",
 
     "REQ-CONS-002: All airframe and electronic enclosures exposed to the "
-    "external environment shall meet a minimum IP54 ingress-protection rating.",
+    "external environment shall meet a minimum IP54 ingress-protection rating. "
+    "[V: inspection / ingress test]",
 
-    "REQ-CONS-003: The system maximum takeoff weight, including payload and "
-    "battery, shall not exceed 25.0 kg.",
+    # v1 CHANGE: MTOW 25 kg never bound a ~4.7 kg design -> 8 kg, which keeps
+    # current catalog realizations valid (4.3-6.7 kg) and makes mass binding.
+    "REQ-CONS-003: The system maximum take-off mass, including payload and "
+    "battery, shall not exceed 8.0 kg.",
+
+    "REQ-CONS-004: The system shall comply with EASA UAS Category C "
+    "operational regulations. [V: inspection / regulatory audit]",
 ]
 
+DRONE_REQUIREMENT_DEPENDENCIES = [
+    {"from": "REQ-FUNC-001", "to": "REQ-INTF-002"},
+    {"from": "REQ-FUNC-004", "to": "REQ-INTF-001"},
+    {"from": "REQ-FUNC-005", "to": "REQ-FUNC-001"},
+    {"from": "REQ-FUNC-005", "to": "REQ-SAFE-006"},
+    {"from": "REQ-FUNC-006", "to": "REQ-INTF-001"},
+    {"from": "REQ-FUNC-007", "to": "REQ-FUNC-001"},
+    {"from": "REQ-FUNC-008", "to": "REQ-FUNC-004"},
+    {"from": "REQ-PERF-002", "to": "REQ-FUNC-003"},
+    {"from": "REQ-PERF-005", "to": "REQ-FUNC-005"},
+    {"from": "REQ-PERF-006", "to": "REQ-FUNC-003"},
+    {"from": "REQ-PERF-006", "to": "REQ-PERF-002"},
+    {"from": "REQ-PERF-006", "to": "REQ-PERF-003"},
+    {"from": "REQ-SAFE-001", "to": "REQ-FUNC-007"},
+]
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+DRONE_FROZEN_REQUIREMENTS = build_frozen_requirement_set(
+    DRONE_REQUIREMENTS,
+    name="autonomous-drone-authoritative-requirements",
+    source="code-declared-example-input",
+    dependencies=DRONE_REQUIREMENT_DEPENDENCIES,
+)
+
 
 def main():
     print("=" * 70)
@@ -251,7 +289,7 @@ def main():
     result = pipeline.generate_system(
         system_name="AutonomousDrone",
         description=DRONE_DESCRIPTION,
-        additional_requirements=DRONE_REQUIREMENTS,
+        frozen_requirements=DRONE_FROZEN_REQUIREMENTS,
         platform_profile=ARDUPILOT_COPTER_PROFILE,
         sitl=True,
         sitl_output_dir="sitl_output",
@@ -260,7 +298,6 @@ def main():
         sitl_fdm_backend="gazebo",
     )
 
-    # ── Results summary ───────────────────────────────────────────────────
     print("\n" + "=" * 70)
     print("GENERATION RESULTS")
     print("=" * 70)
@@ -276,14 +313,14 @@ def main():
         print(f"  … and {len(result['requirements']) - 6} more")
 
     summary = result['model_summary']
-    print(f"\nModel:")
+    print("\nModel:")
     print(f"  Part definitions       : {summary['part_definitions_count']}")
     print(f"  Requirement definitions: {summary['requirement_definitions_count']}")
     part_names = [p.name for p in result['model'].part_definitions]
     print(f"  Parts: {', '.join(part_names) if part_names else '(none)'}")
 
     sim = result['simulation_result']
-    print(f"\nSimulation:")
+    print("\nSimulation:")
     print(f"  Reachability : {sim.reachability_score:.3f}  "
           f"({len(sim.passed_scenarios())}/{len(sim.scenario_results)} scenarios)")
 
@@ -293,7 +330,7 @@ def main():
               f"({br.passed_count()}/{len(br.scenario_results)} state machines)")
 
     if result['evaluation_history']:
-        print(f"\nConvergence:")
+        print("\nConvergence:")
         for ev in result['evaluation_history']:
             bar = "█" * int(ev['score'] * 20)
             print(f"  Iter {ev['iteration']}: {ev['score']:.3f}  {bar}")
@@ -303,7 +340,6 @@ def main():
     print("=" * 70)
     print(result['model_sysml'])
 
-    # ── SITL 报告 ─────────────────────────────────────────────────────
     sitl_report = result.get("sitl_report")
     if sitl_report:
         print("\n" + "=" * 70)

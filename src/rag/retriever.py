@@ -36,30 +36,22 @@ class RetrievedContext:
     def format_for_prompt(self, max_entries: int = 3) -> str:
         """Format retrieved entries as context for an LLM prompt.
 
-        Token-efficiency rules applied here:
-        - Relevance scores are omitted (the LLM gains nothing from them).
-        - Absolute ``Source:`` paths are omitted (machine-local, meaningless
-          to the model and expensive in tokens).
-        - Auto-generated vector IDs (e.g. ``uc3m#…#row-000021`` or full
-          ``/Users/…`` paths) are suppressed; only human-readable titles are
-          shown.
+        Omitted to save tokens: relevance scores; absolute ``Source:`` paths
+        (machine-local); auto-generated vector IDs (e.g. ``uc3m#...#row-000021`` or
+        full ``/Users/...`` paths). Only human-readable titles are shown.
         """
         top_entries = self.entries[:max_entries]
         if not top_entries:
             return "No relevant context found."
 
         def _clean_title(raw: str) -> str:
-            """Return a human-readable title or empty string to suppress it."""
             if not raw or raw == "Untitled":
                 return ""
             # Auto-generated Pinecone / CSV row IDs contain '#'
             if "#" in raw:
                 return ""
-            # Absolute file paths — show only the stem filename
             if raw.startswith("/") or (len(raw) > 2 and raw[1] == ":"):
-                from pathlib import Path
                 stem = Path(raw).name
-                # Still looks like an ID? suppress it.
                 return stem if stem and "#" not in stem else ""
             return raw
 
@@ -74,7 +66,6 @@ class RetrievedContext:
             if content:
                 lines.append(content)
 
-            # Official SysML reference snippet (no path — content only)
             official_snippet = str(entry.get("official_sysml_reference") or "")
             if official_snippet:
                 lines.append("Official SysML v2 reference snippet:")
@@ -86,12 +77,7 @@ class RetrievedContext:
 
 
 class RAGRetriever:
-    """
-    Retrieval Augmented Generation for MBSE design assistance.
-
-    Uses Pinecone retrieval with optional metadata filtering, then augments
-    LLM prompts with the retrieved context.
-    """
+    """Retrieval Augmented Generation for MBSE design assistance."""
 
     def __init__(
         self,
@@ -107,7 +93,9 @@ class RAGRetriever:
         self.pinecone = pinecone_wrapper or PineconeWrapper(
             default_namespace=namespace or "SysML-V2-Release"
         )
-        default_release_root = Path(__file__).resolve().parent / "SysML-v2-release-src"
+        default_release_root = (
+            Path(__file__).resolve().parents[2] / "data" / "SysML-v2-release-src"
+        )
         self.official_release_root = (
             Path(official_release_root).expanduser().resolve()
             if official_release_root
@@ -383,7 +371,6 @@ class RAGRetriever:
         if len(text) <= max_chars:
             return text.strip()
         clipped = text[:max_chars].rstrip()
-        # Preserve clean line breaks while making truncation explicit.
         return clipped.rsplit("\n", 1)[0].rstrip() + "\n..."
 
     @staticmethod
@@ -449,9 +436,7 @@ class RAGRetriever:
         category_filter: Optional[str] = None,
         temperature: float = 0.5,
     ) -> str:
-        """
-        Generate an LLM response augmented with retrieved knowledge.
-        """
+        """Generate an LLM response augmented with retrieved knowledge."""
         context = self.retrieve(
             query,
             top_k=top_k,

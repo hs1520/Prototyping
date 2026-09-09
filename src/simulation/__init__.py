@@ -1,14 +1,4 @@
-"""
-SysML v2 behavioral simulation package.
-
-Validates generated SysML v2 models by building a port-connection graph
-and checking whether key operational scenarios are structurally reachable.
-
-Public API:
-    validate_model(sysml_text, model_name, scenarios) -> SimulationResult
-    SimulationResult
-    ScenarioResult
-"""
+"""SysML v2 behavioral simulation package."""
 
 from .validator import SimulationValidator, SimulationResult
 from .simulator import ScenarioResult
@@ -28,7 +18,6 @@ from .error_localizer import (
     extract_error_context,
     merge_fixed_chunk,
     build_fix_prompt,
-    strip_code_fences,
 )
 from .connectivity_fixer import (
     PortInfo,
@@ -42,6 +31,11 @@ from .connectivity_fixer import (
     merge_connects,
     build_connectivity_prompt,
     extract_connect_lines,
+    ConnectViolation,
+    ConnectivityAudit,
+    audit_connects,
+    fix_signal_directions,
+    fix_missing_connects,
 )
 
 __all__ = [
@@ -64,7 +58,6 @@ __all__ = [
     "extract_error_context",
     "merge_fixed_chunk",
     "build_fix_prompt",
-    "strip_code_fences",
     "PortInfo",
     "PortDirectory",
     "ConnectStmt",
@@ -76,4 +69,9 @@ __all__ = [
     "merge_connects",
     "build_connectivity_prompt",
     "extract_connect_lines",
+    "ConnectViolation",
+    "ConnectivityAudit",
+    "audit_connects",
+    "fix_signal_directions",
+    "fix_missing_connects",
 ]

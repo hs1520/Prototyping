@@ -1,12 +1,11 @@
-"""
-Design evaluator module — v3 redesign.
+"""Design evaluator module - v3 redesign.
 
-Seven dimensions; MCTS fidelity is dropped from the denominator when no
-MCTS config is supplied so its 10 % weight is redistributed proportionally
-among the remaining six rather than being awarded as a free 1.0.
+Seven dimensions; MCTS fidelity leaves the denominator when no MCTS config is
+supplied, and its 10 % weight is redistributed proportionally among the
+remaining six rather than awarded as a free 1.0.
 
   Dim 1  syntactic_validity        10 %
-         Syside parse/sema error count.  Gate: below 0.5 → veto.
+         Syside parse/sema error count.  Gate: below 0.5 -> veto.
 
   Dim 2  requirement_coverage      18 %
          satisfy-link coverage (60 %) + binary per-category impl check (40 %).
@@ -15,21 +14,21 @@ among the remaining six rather than being awarded as a free 1.0.
   Dim 3  structural_completeness   12 %
          Port coverage + numeric attribute coverage + no dangling part usages.
 
-  Dim 4  behavioral_verification   30 %   ★ primary quality signal
-         0.4 × structural reachability score  (scenario pass rate)
-         0.6 × behavioral sim score           (state-machine execution pass rate)
-         Both signals come from SimulationResult passed into evaluate().
-         Falls back to 1.0 (N/A) when no sim result is provided.
+  Dim 4  behavioral_verification   30 %   primary quality signal
+         0.4 x structural reachability score  (scenario pass rate)
+         0.6 x behavioral sim score           (state-machine execution pass rate)
+         Both come from the SimulationResult passed into evaluate();
+         falls back to 1.0 (N/A) when none is provided.
 
   Dim 5  safety_assurance          15 %
          State-def coverage + fault-transition coverage (SysML v2 first/then
          syntax) + override-command path + emergency action defs.
 
   Dim 6  interface_quality          5 %
-         Only penalises DataPort on INTF-external ports; internal DataPort is
-         legitimate and no longer counted against the score.
+         Penalises DataPort only on INTF-external ports; internal DataPort is
+         not counted against the score.
 
-  Dim 7  mcts_fidelity             10 %
+  Dim 7  dse_fidelity             10 %
          MCTS architectural decisions present in the SysML text.
          Dropped (weight redistributed) when no MCTS config is supplied.
 """
@@ -41,25 +40,23 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
 from .design_space import DesignConfiguration
-from .diagnostics import diagnose as _diagnose_impl
+from .diagnostics import _STAKEHOLDER_REQ, diagnose as _diagnose_impl
+from ..utils.sysml_text_utils import named_block_span
 from .eval_helpers import (
-    _HAS_NX,
-    _SENSOR_USAGE_RE,
+    _has_numeric_unit_attr,
     _build_port_type_map,
     _satisfied_req_ids,
     _sysml_text,
 )
+from .model_facts import extract_dse_model_facts
+from ..simulation.connectivity_fixer import parse_connects
 from ..sysml.model import DiagnosticSeverity, FeatureDirection, SysMLModel
 from ..utils.syside_utils import (
     extract_attr_values as _extract_attr_values_via_syside,
     syside as _syside_eval,
     SYSIDE_OK as _SYSIDE_EVAL_OK,
 )
-from ..utils.sysml_text_utils import find_block_end
 
-# ---------------------------------------------------------------------------
-# Data classes (unchanged public API)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class EvaluationCriteria:
@@ -80,14 +77,43 @@ class EvaluationResult:
     weighted_total: float = 0.0
     issues: List[str] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
+    # normalised weights applied (prior or requirement-derived), recorded so
+    # each verdict traces to its weighting
+    weights_used: Dict[str, float] = field(default_factory=dict)
 
     def is_acceptable(self, threshold: float = 0.6) -> bool:
         return self.weighted_total >= threshold
 
 
 # ---------------------------------------------------------------------------
-# Dimension weights (must sum to 1.0)
+# Dimension weights (sum to 1.0)
 # ---------------------------------------------------------------------------
+# DIMENSION_WEIGHTS is the prior, used when no requirements are supplied. With
+# requirements, derive_dimension_weights() re-allocates the requirement-sensitive
+# dimensions in proportion to the severity-weighted requirement mass behind each.
+# The model-integrity dimensions (syntax / structure / dse_fidelity) keep their
+# prior share: they are invariants of a well-formed model, independent of which
+# requirement categories dominate.
+
+# Bump when a dimension's meaning changes, not when its code moves. Scores from
+# different versions are not comparable, so the run report records the version.
+#
+# v2 - requirement_coverage drops A/G contract definitions from its denominator
+# (they are `requirement def` by profile and diluted the metric that judges the
+# layer declaring them); safety_assurance counts guarded transitions from the
+# parse instead of a pattern blind to `accept`. On 29 archived models: R1-BBCTX
+# unchanged to the last digit, R2-BBAG +0.16.
+# v3 - safety_assurance is structural and requirement-anchored: the two lexical
+# sub-metrics are removed (a 15 % sub-metric scored zero for two of three
+# configurations whose responses were named outside the template vocabulary),
+# transition counting becomes per-requirement fault coverage (the raw count
+# saturated for the emitter rendering one guarded transition per contract chain),
+# and SAFE-part connectivity replaces the name-matched override path.
+# behavioral_verification becomes trace-first like the structural term:
+# requirement-tagged scenario pass rate preferred, so machine-rendered contract
+# scenarios no longer dilute the denominator asymmetrically across configurations.
+EVALUATOR_VERSION = "dimension-weights-v3"
+
 
 DIMENSION_WEIGHTS: Dict[str, float] = {
     "syntactic_validity":       0.10,
@@ -96,29 +122,54 @@ DIMENSION_WEIGHTS: Dict[str, float] = {
     "behavioral_verification":  0.30,
     "safety_assurance":         0.15,
     "interface_quality":        0.05,
-    "mcts_fidelity":            0.10,
+    "dse_fidelity":            0.10,
 }
 
 assert abs(sum(DIMENSION_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
 
+_DIMENSION_CATEGORIES: Dict[str, List[str]] = {
+    "requirement_coverage":    ["FUNC", "PERF", "SAFE", "INTF", "CONS", "OPER"],
+    "behavioral_verification": ["FUNC", "OPER", "SAFE"],
+    "safety_assurance":        ["SAFE"],
+    "interface_quality":       ["INTF"],
+}
+
+
+def derive_dimension_weights(requirements: Optional[List[str]]) -> Dict[str, float]:
+    """Requirement-traceable evaluator dimension weights."""
+    if not requirements:
+        return dict(DIMENSION_WEIGHTS)
+    from .requirements_profile import RequirementProfile
+    from .weighting import derive_weights_from_profile
+
+    profile = RequirementProfile.from_requirements(requirements)
+    if not any(profile.category_counts.values()):
+        return dict(DIMENSION_WEIGHTS)
+    shares = derive_weights_from_profile(profile, _DIMENSION_CATEGORIES)
+    sensitive_mass = sum(DIMENSION_WEIGHTS[d] for d in _DIMENSION_CATEGORIES)
+    out = dict(DIMENSION_WEIGHTS)
+    for dim, share in shares.items():
+        out[dim] = sensitive_mass * share
+    total = sum(out.values())
+    return {k: v / total for k, v in out.items()}
+
 
 # ---------------------------------------------------------------------------
-# Veto floors (Strategy D — conjunction constraint)
+# Veto floors (Strategy D - conjunction constraint)
 # ---------------------------------------------------------------------------
 # A weighted average lets a strong dimension compensate a weak one, so a model
-# can pass the threshold while having a critical sub-system effectively unimplemented.
-# These floors enforce a minimum on individual dimensions: when violated, the
-# overall score is capped just below the quality threshold so refinement is
-# always triggered, and a [VETO] issue is added to the report.
+# can pass the threshold with a critical sub-system unimplemented. These floors
+# set a per-dimension minimum: on violation the overall score is capped just
+# below the quality threshold to force refinement, and a [VETO] issue is added.
 
 DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
     "requirement_coverage": (
         0.50,
         "more than half the requirements have no SysML construct implementing them",
     ),
-    "mcts_fidelity": (
+    "dse_fidelity": (
         0.60,
-        "MCTS architectural decisions present only as injected keywords — "
+        "DSE architectural decisions present only as injected keywords — "
         "LLM did not produce the design-level details (voting topology, "
         "grounded guards, item-typed protocol port defs, sensor aggregator) "
         "that injection cannot generate",
@@ -139,24 +190,84 @@ DIMENSION_VETO_FLOORS: Dict[str, Tuple[float, str]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# A stakeholder requirement identifier (`REQ_SAFE_005`, `REQ-FUNC-002`).
+# Separates the frozen requirement set from A/G contract definitions, which
+# are also `requirement def` but are assurance structure.
 
 
+# A guard-based transition, the structural stand-in for a fault transition.
+# `accept` is optional because the bounded A/G profile emits
+# `first X accept Sig if guard then Y`, which a pattern requiring `if` right
+# after the source state cannot see. The transition name is optional in
+# SysML v2, so the pattern does not require one either.
+_GUARDED_TRANSITION = re.compile(
+    r"\btransition\b(?:\s+(?!first\b)\w+)?\s+first\s+\w+"
+    r"(?:\s+accept\s+[^;]+?)?"
+    r"\s+if\s+[^;]+?\s+then\s+\w+\s*;",
+    re.IGNORECASE | re.DOTALL,
+)
 
-# ---------------------------------------------------------------------------
-# Main evaluator
-# ---------------------------------------------------------------------------
+
+def _scoreable_parts(parts: List[Any]) -> List[Any]:
+    """Model parts minus the injected DSE analysis closure wrapper.
+
+    The reachability extractor exempts ``DseDesignAnalysis`` by name
+    (simulation/extractor.py; the constant lives in dse/analysis_emitter.py)
+    because the closure holds the recommendedDesign binding rather than a system
+    component. The quality denominators follow the same rule.
+    """
+    from .analysis_emitter import ANALYSIS_CLOSURE_DEF_NAME
+
+    return [
+        part for part in parts
+        if getattr(part, "name", None) != ANALYSIS_CLOSURE_DEF_NAME
+    ]
+
+
+def _specialization_bases(text: str, part_name: str) -> List[str]:
+    """Model-local base def names a part def specialises (``:>`` chain heads).
+
+    A catalogue implementation (``Impl :> Planned``) declares no ports of its own;
+    the variant emitter's contract is that variants specialise the host type and so
+    share its ports (dse/variation_introducer.py). Port scorers follow the
+    specialisation, or every emitted variant is charged as an unported component:
+    on the seed-0 ablation wave 10 catalogue variants cost FULL's terminal artifact
+    0.043 against NO-DSE on the same ruler.
+    """
+    match = re.search(
+        rf"\bpart\s+def\s+{re.escape(part_name)}\b([^{{;\n]*)", text
+    )
+    if not match:
+        return []
+    return re.findall(r":>\s*([A-Za-z_][\w:]*)", match.group(1))
+
+
+def _directed_via_specialization(
+    text: str,
+    part_name: str,
+    has_directed_port_of_own,
+    parts_by_name: Dict[str, Any],
+    _seen: Optional[Set[str]] = None,
+) -> bool:
+    seen = _seen or set()
+    if part_name in seen:
+        return False
+    seen.add(part_name)
+    for base_name in _specialization_bases(text, part_name):
+        base = parts_by_name.get(base_name.split("::")[-1])
+        if base is None:
+            continue
+        if has_directed_port_of_own(base):
+            return True
+        if _directed_via_specialization(
+            text, base.name, has_directed_port_of_own, parts_by_name, seen,
+        ):
+            return True
+    return False
+
 
 class DesignEvaluator:
-    """
-    Evaluates SysML v2 design configurations against five quality dimensions.
-
-    Usage
-    -----
-    result = evaluator.evaluate(config, model, mcts_config=best_config)
-    """
+    """Evaluates SysML v2 design configurations against five quality dimensions."""
 
     def __init__(self, quality_threshold: float = 0.75) -> None:
         # Expose criteria list for backward compatibility with tests/tooling
@@ -168,17 +279,14 @@ class DesignEvaluator:
         # without making the cap an arbitrary absolute value.
         self.quality_threshold = quality_threshold
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def evaluate(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration] = None,
-        syntax_result=None,    # Optional[SyntaxCheckResult] — cached from syntax gate
-        sim_result=None,       # Optional[SimulationResult] — structural + behavioral sim
+        dse_config: Optional[DesignConfiguration] = None,
+        syntax_result=None,
+        sim_result=None,
+        requirements: Optional[List[str]] = None,
     ) -> EvaluationResult:
         """Evaluate model quality across all seven dimensions."""
         self._cached_syntax_result = syntax_result
@@ -188,19 +296,30 @@ class DesignEvaluator:
         # can do AST queries without re-parsing.
         self._syside_model = getattr(model, "_syside_model", None)
         try:
-            return self._evaluate_inner(config, model, mcts_config, syntax_result)
+            return self._evaluate_inner(
+                config, model, dse_config, syntax_result, requirements
+            )
         finally:
             self._cached_syntax_result = None
             self._sim_result = None
             self._syside_attr_map = {}
             self._syside_model = None
 
+    # The dse_fidelity checks key off these catalog decision parameters; a config
+    # without any of them (e.g. a variation-DSE config of variant choices) has
+    # nothing this dimension can measure -> treated as N/A, weight redistributed.
+    _DSE_SCALAR_KEYS = frozenset({
+        "redundancy_level", "communication_protocol", "num_sensors",
+        "control_frequency_hz", "distributed_control",
+    })
+
     def _evaluate_inner(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
         syntax_result,
+        requirements: Optional[List[str]] = None,
     ) -> EvaluationResult:
         result = EvaluationResult(configuration_name=config.name)
 
@@ -211,30 +330,46 @@ class DesignEvaluator:
             "behavioral_verification": self._score_behavioral_verification,
             "safety_assurance":        self._score_safety_assurance,
             "interface_quality":       self._score_interface_quality,
-            "mcts_fidelity":           self._score_mcts_fidelity,
+            "dse_fidelity":           self._score_dse_fidelity,
         }
 
-        # When no MCTS config is supplied, drop mcts_fidelity and redistribute
-        # its weight proportionally so the free 1.0 doesn't inflate the total.
-        has_mcts = mcts_config is not None
+        # dse_fidelity participates only when the config carries catalog decision keys
+        # it can check; otherwise (no config, or a variation config of variant choices)
+        # it is dropped and its weight redistributed, so a free 1.0 does not inflate
+        # the total.
+        # Scalar keys are the legacy parametric-MCTS shape. The variation mode selects
+        # catalogue variants ({"propulsionSystem": "catalog_r6_p16_c6"}), and the
+        # dimension's semantics ("how well the committed model realises the selected
+        # DSE decisions") apply to those decisions too, but the gate predated the mode
+        # and scored that arm on less.
+        has_dse = dse_config is not None and (
+            any(
+                k in (dse_config.parameters or {})
+                for k in self._DSE_SCALAR_KEYS
+            )
+            or bool(self._variant_choices(dse_config))
+        )
+        weights = derive_dimension_weights(requirements)
         active_weights = {
-            dim: w for dim, w in DIMENSION_WEIGHTS.items()
-            if has_mcts or dim != "mcts_fidelity"
+            dim: w for dim, w in weights.items()
+            if has_dse or dim != "dse_fidelity"
         }
         total_active_w = sum(active_weights.values())
+        result.weights_used = {
+            d: round(w / total_active_w, 4) for d, w in active_weights.items()
+        }
 
         weighted_sum = 0.0
         for dim, fn in scorers.items():
             if dim not in active_weights:
                 continue
-            raw = float(fn(config, model, mcts_config))
+            raw = float(fn(config, model, dse_config))
             clamped = max(0.0, min(1.0, raw))
             result.criteria_scores[dim] = round(clamped, 4)
             weighted_sum += clamped * (active_weights[dim] / total_active_w)
 
         result.weighted_total = round(weighted_sum, 4)
 
-        # ── Veto floors (Strategy D) ─────────────────────────────────────
         veto_triggered = False
         has_safe = any(
             "_SAFE_" in r.name for r in model.requirement_definitions
@@ -243,9 +378,16 @@ class DesignEvaluator:
         for dim, (floor, reason) in DIMENSION_VETO_FLOORS.items():
             if dim == "safety_assurance" and not has_safe:
                 continue
-            if dim == "mcts_fidelity" and not has_mcts:
+            if dim == "dse_fidelity" and not has_dse:
                 continue
             if dim == "syntactic_validity" and not has_diagnostics:
+                continue
+            if dim == "syntactic_validity" and not self._has_syntax_errors(
+                syntax_result, model
+            ):
+                # The veto reason asserts failed compilation, so warnings alone
+                # do not trigger it (46 warnings and 0 errors misdirected every
+                # repair prompt).
                 continue
             score = result.criteria_scores.get(dim, 1.0)
             if score < floor:
@@ -260,7 +402,7 @@ class DesignEvaluator:
             if result.weighted_total > cap:
                 result.weighted_total = round(cap, 4)
 
-        issues, recs = self._diagnose(model, mcts_config)
+        issues, recs = self._diagnose(model, dse_config)
         result.issues.extend(issues)
         result.recommendations.extend(recs)
 
@@ -270,16 +412,41 @@ class DesignEvaluator:
 
         return result
 
-    # ------------------------------------------------------------------
-    # Syside AST query helpers
-    # ------------------------------------------------------------------
+    def verdict_robustness(
+        self,
+        result: EvaluationResult,
+        threshold: Optional[float] = None,
+        n_samples: int = 300,
+        random_seed: int = 1,
+    ) -> float:
+        """How robust the pass/fail verdict is to the dimension weighting."""
+        import random as _random
+
+        thr = self.quality_threshold if threshold is None else threshold
+        dims = sorted(result.criteria_scores)
+        if not dims:
+            return 1.0
+        # A fired veto caps weighted_total below the threshold whatever the
+        # weighting, so the verdict is weight-independent and robustness is 1.0.
+        # Sampling raw criteria_scores (uncapped) against the capped nominal would
+        # report "the weighting decides" for a verdict the weighting cannot change.
+        if any(issue.startswith("[VETO]") for issue in result.issues):
+            return 1.0
+        nominal_pass = result.weighted_total >= thr
+        rng = _random.Random(random_seed)
+        agree = 0
+        for _ in range(n_samples):
+            draws = [rng.gammavariate(1.0, 1.0) for _ in dims]
+            total = sum(draws) or 1.0
+            score = sum(
+                (d / total) * result.criteria_scores[dim]
+                for d, dim in zip(draws, dims)
+            )
+            if (score >= thr) == nominal_pass:
+                agree += 1
+        return agree / n_samples
 
     def _syside_count(self, cls_name: str) -> Optional[int]:
-        """
-        Count syside AST nodes of *cls_name* in the cached syside model.
-        Returns None when syside is unavailable or the type doesn't exist,
-        so callers can fall back to regex.
-        """
         sm = getattr(self, "_syside_model", None)
         if sm is None or not _SYSIDE_EVAL_OK:
             return None
@@ -292,10 +459,6 @@ class DesignEvaluator:
             return None
 
     def _syside_any(self, cls_name: str, predicate=None) -> Optional[bool]:
-        """
-        Return True/False if any syside node of *cls_name* satisfies
-        *predicate* (default: just existence).  Returns None on fallback.
-        """
         sm = getattr(self, "_syside_model", None)
         if sm is None or not _SYSIDE_EVAL_OK:
             return None
@@ -310,69 +473,67 @@ class DesignEvaluator:
         except Exception:
             return None
 
-    # ------------------------------------------------------------------
-    # Dimension 0: Syntactic Validity (8 %) — Syside diagnostics
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _has_syntax_errors(syntax_result, model: SysMLModel) -> bool:
+        if syntax_result is not None:
+            return bool(getattr(syntax_result, "has_errors", False))
+        return any(
+            d.severity == DiagnosticSeverity.ERROR for d in model.diagnostics
+        )
 
     def _score_syntactic_validity(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Scores syntactic/semantic correctness.
+        """Scores syntactic/semantic correctness.
 
-        Priority 1: use the SyntaxCheckResult cached from the syntax gate
-                    (syside try_load_model — most accurate).
-        Priority 2: fall back to model.diagnostics (legacy path).
+        Prefers the SyntaxCheckResult cached from the syntax gate (syside
+        try_load_model), falling back to model.diagnostics (legacy path).
+        Warnings-only results are floored at 0.5 in both paths, so an error-free
+        model does not score the same as a failed compile.
         """
-        # Priority 1: cached syside result from syntax gate
         cached = getattr(self, "_cached_syntax_result", None)
         if cached is not None:
             return cached.score
 
-        # Priority 2: legacy model.diagnostics fallback
         diags = model.diagnostics
         if not diags:
             return 1.0
         n_errors = sum(1 for d in diags if d.severity == DiagnosticSeverity.ERROR)
         n_warnings = sum(1 for d in diags if d.severity == DiagnosticSeverity.WARNING)
+        if n_errors == 0:
+            return max(0.5, 1.0 - 0.05 * n_warnings)
         return max(0.0, 1.0 - 0.20 * n_errors - 0.05 * n_warnings)
-
-    # ------------------------------------------------------------------
-    # Dimension 1: Requirement Coverage (18 %)
-    # ------------------------------------------------------------------
 
     def _score_requirement_coverage(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Two sub-metrics:
-          satisfy_cov  (60 %) — fraction of REQ IDs that have a satisfy link
-          category_impl(40 %) — binary presence check per active category:
-            FUNC  → ≥1 action def present
-            PERF  → ≥1 numeric+unit attribute present
-            SAFE  → ≥1 state def present
-            INTF  → ≥1 non-empty port def + ≥1 connect present
-            CONS  → ≥1 doc comment present
-            OPER  → enum def + mode-machine state def present
-        """
         req_defs = model.requirement_definitions
         if not req_defs:
             return 0.0
 
         text = _sysml_text(model)
 
-        # ── satisfy-link coverage ─────────────────────────────────────────
-        req_ids = {r.name for r in req_defs}
+        # ── satisfy-link coverage ─────────────────────────────
+        # Denominator is the stakeholder requirements only. A bounded A/G layer
+        # also declares its contracts as `requirement def` (the profile needs
+        # legal SysML constructs), so counting every requirement def put those
+        # contracts into the denominator of the metric judging them: the same
+        # seed scored 1.00 without the layer and 0.55 with it, every other
+        # dimension identical. Contract coverage is measured separately by
+        # ag_traceability against the declared requirement set.
+        #
+        # A model declaring no stakeholder-shaped ids keeps the old denominator.
+        stakeholder = {r.name for r in req_defs if _STAKEHOLDER_REQ.match(r.name)}
+        req_ids = stakeholder or {r.name for r in req_defs}
         sat_ids = _satisfied_req_ids(model)
         satisfy_cov = len(sat_ids & req_ids) / len(req_ids)
 
-        # ── per-category binary implementation check ──────────────────────
         cat_checks: List[float] = []
 
         if any("_FUNC_" in r.name for r in req_defs):
@@ -394,7 +555,6 @@ class DesignEvaluator:
             cat_checks.append(1.0 if has_state else 0.0)
 
         if any("_INTF_" in r.name for r in req_defs):
-            # Port def with a non-empty body (typed interface port)
             has_typed_port_ast = self._syside_any(
                 "PortDefinition",
                 lambda pd: any(True for _ in (getattr(pd, "owned_ports", None) or [])),
@@ -434,352 +594,147 @@ class DesignEvaluator:
 
         return 0.60 * satisfy_cov + 0.40 * category_impl
 
-    # ------------------------------------------------------------------
-    # Dimension 2: MCTS Fidelity (25 %)
-    # ------------------------------------------------------------------
+    @classmethod
+    def _variant_choices(
+        cls, dse_config: Optional[DesignConfiguration],
+    ) -> Dict[str, str]:
+        if dse_config is None:
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in (dse_config.parameters or {}).items()
+            if key not in cls._DSE_SCALAR_KEYS
+            and isinstance(value, str) and value
+        }
 
-    def _score_mcts_fidelity(
+    def _score_dse_fidelity(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
+        """Score how well the committed model realises the selected DSE decisions.
+
+        The parser-backed facts are shared with diagnostics; only numerical policy
+        remains here, so scoring and recommendations cannot drift on what the model
+        contains.
         """
-        Scores the LLM's design judgment in implementing MCTS decisions.
-
-        Critical insight: Phase-3 programmatic injections (in orchestrator.py)
-        write keyword patterns directly into the SysML text — `controlFrequency`,
-        `MAVLinkSignal`, `sensorUnitN`, `TripleChannelRedundancy`.  An evaluator
-        that checks "is this keyword present?" measures injection success, not
-        LLM design judgment, creating a self-verification loop.
-
-        This dimension instead checks design qualities that injection CANNOT
-        produce, so it correctly measures whether the LLM understood the
-        architectural intent:
-
-          • Causal connectivity     — guards tied to actual ports/attributes
-          • Type richness           — port def has inner item; item def linked
-          • Topology coherence      — redundancy has voter; sensors aggregated
-          • Domain separation       — power vs. data ports differentiated
-          • Behavioral grounding    — frequency lives next to action/state defs
-          • Decision consistency    — distributed_control matches actual count
-
-        Each parameter mixes a small "injection floor" (low weight) with
-        larger weights on LLM-judgment indicators.  Returns 1.0 (N/A) when no
-        MCTS config is supplied.
-        """
-        if mcts_config is None:
+        if dse_config is None:
             return 1.0
 
-        params = mcts_config.parameters
-        text = _sysml_text(model)
+        params = dse_config.parameters
+        # ── Variation-mode fidelity: chosen variant materialised ────────
+        # The variant emitter's naming contract (agents/exploration.py):
+        # type name = f"{variant.capitalize()}{usage.capitalize()}Impl".
+        # Full credit needs the def to exist and the usage retyped to it.
+        variant_choices = self._variant_choices(dse_config)
+        if variant_choices:
+            text = _sysml_text(model)
+            realised = 0.0
+            for usage, variant in variant_choices.items():
+                expected = (
+                    f"{variant.capitalize()}{usage.capitalize()}Impl"
+                )
+                def_present = re.search(
+                    rf"\bpart\s+def\s+{re.escape(expected)}\b", text
+                )
+                retyped = re.search(
+                    rf"\bpart\s+{re.escape(usage)}\s*:\s*"
+                    rf"{re.escape(expected)}\b", text
+                )
+                if def_present and retyped:
+                    realised += 1.0
+                elif def_present:
+                    realised += 0.5
+            return realised / len(variant_choices)
+
+        facts = extract_dse_model_facts(
+            _sysml_text(model),
+            params,
+            syside_model=getattr(self, "_syside_model", None),
+        )
         checks: List[Tuple[str, float]] = []
 
-        # Helper: extract body text of part defs whose name matches a pattern
-        def _part_bodies_matching(name_pat: str) -> str:
-            part_re = re.compile(
-                rf"\bpart\s+def\s+(\w*(?:{name_pat})\w*)\s*\{{",
-                re.IGNORECASE,
-            )
-            bodies: List[str] = []
-            for m in part_re.finditer(text):
-                brace_open = text.index("{", m.start())
-                end = find_block_end(text, brace_open)
-                if end != -1:
-                    bodies.append(text[brace_open:end])
-            return "\n".join(bodies)
-
-        # ── Redundancy: voting topology + signal grounding ───────────────
-        # Injection writes channel states + made-up `channelXFailed` guards
-        # with no source.  LLM judgment shows up as:
-        #   (a) sanity:    channel states match redundancy level (floor)
-        #   (b) voting:    ≥1 transition guard combines multiple channels
-        #                  ("when X and Y", "when X or Y") — true TMR pattern
-        #   (c) grounded:  guard names map to declared in ports / attributes
-        #                  in the same part body (signals have a real source)
         redundancy = str(params.get("redundancy_level", "none")).lower()
-        if redundancy in ("triple", "dual"):
-            n_channels = 3 if redundancy == "triple" else 2
-            safety_body = _part_bodies_matching("Safety|Monitor|Fault|Health")
-
-            # (a) sanity — redundancy "shape" is present.  Two equivalent forms
-            #     count: (i) one state per channel (`state ChannelA/B/C` or
-            #     `Primary/Backup/Standby`), or (ii) one Boolean attribute per
-            #     channel (`attribute channelXFailed : Boolean`) which is the
-            #     more elegant "Active + voting on Booleans" idiom.  Either
-            #     form represents the redundancy decision; both are accepted
-            #     so the evaluator does not penalise the more compact design.
-            channel_states = re.findall(
-                r"\bstate\s+(Channel[A-Z]\w*|Primary\w*|Backup\w*|Standby\w*)",
-                safety_body, re.IGNORECASE,
-            )
-            channel_bools = re.findall(
-                r"\battribute\s+(channel[A-Z]\w*Failed|primary\w*Failed|backup\w*Failed)\s*:\s*Boolean",
-                safety_body, re.IGNORECASE,
-            )
-            shape_count = max(len(set(channel_states)), len(set(channel_bools)))
-            sanity = 1.0 if shape_count >= n_channels else 0.0
-
-            # (b) voting — composite guard expressions.
-            #     Accepts the canonical SysML v2 form `transition X first Y if
-            #     <guard> then Z;` AND the legacy non-canonical project form
-            #     `transition X from Y to Z when <guard>;` so the metric is not
-            #     biased against either generation style.  Multi-line variants
-            #     (`first` / `if` / `then` on separate lines) are matched via
-            #     re.DOTALL with whitespace tolerance.
-            voting_canonical = re.compile(
-                r"\btransition\s+\w+\s+first\s+\w+\s+if\s+([^;]+?)\s+then\s+\w+\s*;",
-                re.IGNORECASE | re.DOTALL,
-            )
-            voting_legacy = re.compile(
-                r"\btransition\s+\w+\s+from\s+\w+\s+to\s+\w+\s+when\s+([^;]+);",
-                re.IGNORECASE,
-            )
-            has_voting = False
-            for pat in (voting_canonical, voting_legacy):
-                for m in pat.finditer(safety_body):
-                    guard = m.group(1).lower()
-                    logical_ops = guard.count(" and ") + guard.count(" or ")
-                    channel_refs = len(re.findall(r"channel[a-z]\w*", guard))
-                    if logical_ops >= 1 or channel_refs >= 2:
-                        has_voting = True
-                        break
-                if has_voting:
-                    break
-            voting = 1.0 if has_voting else 0.0
-
-            # (c) grounded — every guard identifier must resolve to a declared
-            #     in port or attribute in the safety part body.  Accepts both
-            #     the canonical `if <guard>` and the legacy `when <guard>`.
-            #     Skips literal keywords (`true` / `false`) which do not need
-            #     a producer.
-            _GUARD_LITERALS = {"true", "false"}
-            guard_names = set()
-            for kw in (r"if", r"when"):
-                for m in re.finditer(
-                    rf"\b{kw}\s+(\w+)", safety_body, re.IGNORECASE,
-                ):
-                    name = m.group(1)
-                    if name.lower() not in _GUARD_LITERALS:
-                        guard_names.add(name)
-            grounded_count = sum(
-                1 for g in guard_names
-                if re.search(
-                    rf"\b(?:in\s+port|attribute)\s+{re.escape(g)}\b",
-                    safety_body, re.IGNORECASE,
-                )
-            )
-            grounding = grounded_count / max(len(guard_names), 1)
-
-            redundancy_score = (
-                0.20 * sanity        # injection floor
-                + 0.40 * voting      # primary LLM judgment
-                + 0.40 * grounding   # signal causality
-            )
-            checks.append((f"{redundancy}_redundancy_design", redundancy_score))
-
-        # ── Communication protocol: type richness + clean separation ────
-        # Injection writes `port def XSignal;` (empty body) and replaces
-        # DataPort/RfPort usages.  LLM judgment shows up as:
-        #   (a) sanity:    port def exists (floor — injection guarantees it)
-        #   (b) body:      port def has a non-empty body
-        #   (c) item link: body references the protocol's item def
-        #   (d) cleanup:   block-form generic port defs are removed
-        #   (e) domain:    PowerPort-typed ports are NOT replaced
-        protocol = str(params.get("communication_protocol", "")).strip()
-        if protocol and protocol.lower() not in ("none", ""):
-            proto_id = re.sub(r"[^A-Za-z0-9]", "", protocol)
-            signal_type = f"{proto_id}Signal"
-
-            # (a) sanity
-            has_def = bool(re.search(
-                rf"port\s+def\s+{re.escape(signal_type)}\b",
-                text, re.IGNORECASE,
+        if facts.redundancy is not None:
+            expected_channels = 3 if redundancy == "triple" else 2
+            guard_count = len(facts.redundancy.guard_names)
+            grounded = guard_count - len(facts.redundancy.ungrounded_guards)
+            grounding = grounded / max(guard_count, 1)
+            checks.append((
+                f"{redundancy}_redundancy_design",
+                0.20 * (1.0 if facts.redundancy.shape_count >= expected_channels else 0.0)
+                + 0.40 * (1.0 if facts.redundancy.has_composite_voting else 0.0)
+                + 0.40 * grounding,
             ))
 
-            # (b) body present (block-form `port def X { ... }`)
-            body_match = re.search(
-                rf"port\s+def\s+{re.escape(signal_type)}\s*\{{([^}}]*)\}}",
-                text, re.IGNORECASE,
-            )
-            has_body = bool(body_match)
-            body = body_match.group(1) if body_match else ""
-
-            # (c) body references a protocol-specific item def
-            item_linked = bool(re.search(
-                rf"\bitem\s+\w+\s*:\s*\w*{re.escape(proto_id)}\w*",
-                body, re.IGNORECASE,
-            )) if has_body else False
-
-            # (d) no leftover block-form generic port defs (semicolon form
-            #     is removed by injection; block form is the LLM's job)
-            leftover_block = bool(re.search(
-                r"\bport\s+def\s+(?:DataPort|RfPort|RFPort|GenericPort)\s*\{",
-                text, re.IGNORECASE,
+        if facts.protocol is not None:
+            protocol = facts.protocol
+            checks.append((
+                "protocol_design",
+                0.10 * float(protocol.has_definition)
+                + 0.25 * float(protocol.has_body)
+                + 0.25 * float(protocol.item_linked)
+                + 0.20 * float(not protocol.stale_generic_definitions)
+                + 0.20 * float(not protocol.power_misuse_ports),
             ))
-            cleaned = 0.0 if leftover_block else 1.0
 
-            # (e) power ports retain PowerPort type (domain separation)
-            power_misuse = bool(re.search(
-                rf"\b(?:in|out|inout)\s+port\s+\w*[Pp]ower\w*\s*:\s*"
-                rf"{re.escape(signal_type)}\b",
-                text,
-            ))
-            domain_sep = 0.0 if power_misuse else 1.0
-
-            protocol_score = (
-                0.10 * (1.0 if has_def else 0.0)       # injection floor
-                + 0.25 * (1.0 if has_body else 0.0)    # LLM enriches def
-                + 0.25 * (1.0 if item_linked else 0.0) # type-system linkage
-                + 0.20 * cleaned                       # dead-def cleanup
-                + 0.20 * domain_sep                    # domain awareness
-            )
-            checks.append(("protocol_design", protocol_score))
-
-        # ── Sensor count: redundancy must be wired, not just declared ────
-        # Injection writes `part sensorUnitN : Type;` with NO connects (the
-        # injection's fan-in protection skips wiring).  LLM judgment shows
-        # up as:
-        #   (a) count:       enough sensor instances exist (floor)
-        #   (b) connected:   redundant sensors are NOT dangling
-        #   (c) aggregator:  a Voter/Aggregator/Fusion part type exists
-        num_sensors = int(params.get("num_sensors", 0))
-        if num_sensors > 1:
-            instances = {m.group(1) for m in _SENSOR_USAGE_RE.finditer(text)}
-
-            # (a) count
-            count_ok = 1.0 if len(instances) >= num_sensors else \
-                       len(instances) / num_sensors
-
-            # (b) every instance appears in a connect statement
-            connect_re = re.compile(
-                r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", re.IGNORECASE,
-            )
-            connected_parts: set = set()
-            for m in connect_re.finditer(text):
-                connected_parts.add(m.group(1))
-                connected_parts.add(m.group(2))
+        if facts.sensors is not None:
+            expected = int(params.get("num_sensors", 0))
+            count = len(facts.sensors.instances)
+            count_score = 1.0 if count >= expected else count / expected
             connectivity = (
-                len(instances & connected_parts) / max(len(instances), 1)
-                if instances else 0.0
+                len(facts.sensors.connected_instances) / max(count, 1)
+                if count else 0.0
             )
-
-            # (c) aggregator/voter part def exists
-            has_aggregator = bool(re.search(
-                r"\bpart\s+def\s+\w*"
-                r"(?:Aggregat|Voter|Fusion|Combiner|Arbiter|Merger|Selector)\w*",
-                text, re.IGNORECASE,
+            checks.append((
+                "sensor_redundancy_design",
+                0.20 * count_score
+                + 0.50 * connectivity
+                + 0.30 * float(facts.sensors.has_aggregator),
             ))
 
-            sensor_score = (
-                0.20 * count_ok                         # injection floor
-                + 0.50 * connectivity                   # core LLM judgment
-                + 0.30 * (1.0 if has_aggregator else 0.0)  # voter pattern
-            )
-            checks.append(("sensor_redundancy_design", sensor_score))
-
-        # ── Control frequency: tied to behavior, not just an attribute ───
-        # Injection writes the attribute.  LLM judgment shows up as:
-        #   (a) location:   attribute lives in the controller part (floor)
-        #   (b) behaviour:  same part has ≥1 action def or state def
-        #                   (the periodic logic the frequency is supposed to
-        #                    drive)
-        freq = float(params.get("control_frequency_hz", 0))
-        if freq > 0:
-            ctrl_body = _part_bodies_matching(
-                "Controller|Flight|Autopilot|Nav|MainControl"
-            )
-            freq_str = f"{freq:.1f}".rstrip("0").rstrip(".")
-            in_ctrl = bool(re.search(
-                rf"controlFrequency\s*:\s*Real\s*=\s*{re.escape(freq_str)}",
-                ctrl_body,
-            ))
-            has_behaviour = bool(
-                re.search(r"\baction\s+def\s+\w+", ctrl_body, re.IGNORECASE)
-                or re.search(r"\bstate\s+def\s+\w+", ctrl_body, re.IGNORECASE)
-            )
+        if facts.control is not None:
             checks.append((
                 "control_freq_design",
-                0.40 * (1.0 if in_ctrl else 0.0)         # injection floor
-                + 0.60 * (1.0 if has_behaviour else 0.0)  # behavioural ground
+                0.40 * float(facts.control.frequency_in_controller)
+                + 0.60 * float(facts.control.has_behavior),
             ))
 
-        # ── Distributed control: actual topology check ───────────────────
-        # NO injection writes this — fully an LLM judgment.
-        #   True  → ≥3 distinct controller-class part defs
-        #   False → exactly 1 (or at most 2 with backup) controller part def
         distributed = params.get("distributed_control")
         if distributed is True:
-            _dist_kws = ("controller", "manager", "module", "subsystem", "node")
-            sm_obj = getattr(self, "_syside_model", None)
-            if sm_obj is not None and _SYSIDE_EVAL_OK:
-                pd_cls = getattr(_syside_eval, "PartDefinition", None)
-                ctrl_parts = list({
-                    pd.name for pd in sm_obj.nodes(pd_cls)
-                    if pd_cls and any(kw in (pd.name or "").lower() for kw in _dist_kws)
-                }) if pd_cls else []
-            else:
-                ctrl_parts = re.findall(
-                    r"\bpart\s+def\s+(\w*"
-                    r"(?:Controller|Manager|Module|Subsystem|Node)\w*)\s*\{",
-                    text, re.IGNORECASE,
-                )
             checks.append((
-                "distributed_topology", min(1.0, len(set(ctrl_parts)) / 3.0)
+                "distributed_topology",
+                min(1.0, (facts.controller_count or 0) / 3.0),
             ))
         elif distributed is False:
-            sm_obj = getattr(self, "_syside_model", None)
-            if sm_obj is not None and _SYSIDE_EVAL_OK:
-                pd_cls = getattr(_syside_eval, "PartDefinition", None)
-                ctrl_parts = [
-                    pd.name for pd in sm_obj.nodes(pd_cls)
-                    if pd_cls and "controller" in (pd.name or "").lower()
-                ] if pd_cls else []
+            count = facts.controller_count or 0
+            if count == 1:
+                topology_score = 1.0
+            elif count == 2:
+                topology_score = 0.7
+            elif count == 0:
+                topology_score = 0.2
             else:
-                ctrl_parts = re.findall(
-                    r"\bpart\s+def\s+\w*Controller\w*\s*\{",
-                    text, re.IGNORECASE,
-                )
-            n_ctrl = len(ctrl_parts)
-            if n_ctrl == 1:
-                score = 1.0
-            elif n_ctrl == 2:
-                score = 0.7
-            elif n_ctrl == 0:
-                score = 0.2  # missing controller is also a problem
-            else:
-                # 3+ controllers contradicts a centralised decision
-                score = max(0.0, 1.0 - (n_ctrl - 1) * 0.3)
-            checks.append(("centralised_topology", score))
+                topology_score = max(0.0, 1.0 - (count - 1) * 0.3)
+            checks.append(("centralised_topology", topology_score))
 
-        if not checks:
-            return 1.0
-        return sum(v for _, v in checks) / len(checks)
-
-    # ------------------------------------------------------------------
-    # Dimension 3: Structural Completeness (12 %)
-    # ------------------------------------------------------------------
-
+        return (
+            sum(value for _, value in checks) / len(checks)
+            if checks else 1.0
+        )
     def _score_structural_completeness(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Three sub-metrics focused on static structural quality:
-          port_coverage   (40 %) — fraction of parts with ≥1 directed port
-          attr_coverage   (40 %) — fraction of parts with ≥1 numeric attribute
-          no_dangling     (20 %) — fraction of part usages appearing in ≥1 connect
-        Connectivity quality (reachability) is measured in behavioral_verification.
-        """
-        parts = model.part_definitions
+        parts = _scoreable_parts(model.part_definitions)
         if not parts:
             return 0.0
         n = len(parts)
         text = _sysml_text(model)
 
-        # ── Port coverage (text-level fallback for AST direction=NONE) ───
         def _has_directed_port(part) -> bool:  # noqa: ANN001
             if any(
                 getattr(p, "direction", FeatureDirection.NONE) not in
@@ -790,39 +745,29 @@ class DesignEvaluator:
             # Fallback: scan part def body for `in/out/inout port` keyword.
             # Syside sometimes returns NONE for directions defined in port def
             # bodies rather than inline at the port usage site.
-            part_block_re = re.compile(
-                rf"\bpart\s+def\s+{re.escape(part.name)}\s*\{{(.*?)\n\s*\}}",
-                re.DOTALL,
-            )
-            m = part_block_re.search(text)
-            body = m.group(1) if m else ""
+            span = named_block_span(text, "part", part.name)
+            body = text[span[0] + 1:span[1]] if span else ""
             return bool(re.search(
                 r"\b(?:in|out|inout)\s+port\s+\w+", body, re.IGNORECASE
             ))
-        port_cov = sum(1 for p in parts if _has_directed_port(p)) / n
 
-        # ── Attribute coverage (PERF/CONS parts only) ───────────────────
-        # Only parts that satisfy PERF or CONS requirements are expected to
-        # carry numeric+unit attributes — those requirements are quantitative
-        # by definition.  Parts satisfying only FUNC/SAFE/INTF/OPER are
-        # excluded from the denominator to avoid false penalties.
+        parts_by_name = {p.name: p for p in parts}
+
+        def _has_directed_port_or_inherits(part) -> bool:  # noqa: ANN001
+            if _has_directed_port(part):
+                return True
+            return _directed_via_specialization(
+                text, part.name, _has_directed_port, parts_by_name,
+            )
+        port_cov = sum(
+            1 for p in parts if _has_directed_port_or_inherits(p)
+        ) / n
+
+        # ── Attribute coverage (PERF/CONS parts only) ───────────────
+        # PERF and CONS requirements are quantitative, so only the parts that
+        # satisfy them are expected to carry numeric+unit attributes. Parts
+        # satisfying only FUNC/SAFE/INTF/OPER stay out of the denominator.
         syside_attr_map = getattr(self, "_syside_attr_map", {})
-
-        def _has_numeric_unit_attr(part) -> bool:  # noqa: ANN001
-            for a in part.attributes:
-                val  = getattr(a, "default_value", None)
-                unit = getattr(a, "unit", None)
-                if val and unit:
-                    try:
-                        float(str(val).replace(",", "."))
-                        return True
-                    except (TypeError, ValueError):
-                        pass
-                # Fallback: syside evaluated this attribute to a concrete float
-                # (catches expressions like `= mass * g` the IR parser left as str)
-                if a.name in syside_attr_map:
-                    return True
-            return False
 
         quantitative_parts = [
             p for p in parts
@@ -833,47 +778,19 @@ class DesignEvaluator:
         ]
         if quantitative_parts:
             attr_cov = sum(
-                1 for p in quantitative_parts if _has_numeric_unit_attr(p)
+                1 for p in quantitative_parts
+                if _has_numeric_unit_attr(p, syside_attr_map)
             ) / len(quantitative_parts)
         else:
-            attr_cov = 1.0  # no PERF/CONS requirements → N/A
+            attr_cov = 1.0
 
-        # ── Out-port connection rate (replaces lenient connect_density) ──
-        # Count distinct out/inout port names that appear as the source of a
-        # connect statement. Unconnected outputs are a real architectural gap.
-        out_port_decls = re.findall(
-            r"\b(?:out|inout)\s+port\s+(\w+)", text, re.IGNORECASE
-        )
-        connect_sources = {
-            m.group(1)
-            for m in re.finditer(
-                r"\bconnect\s+\w+\.(\w+)\s+to\s+\w+\.\w+", text, re.IGNORECASE
-            )
-        }
-        if out_port_decls:
-            connected_out = sum(
-                1 for p in set(out_port_decls) if p in connect_sources
-            )
-            connect_density = connected_out / len(set(out_port_decls))
-        else:
-            # No out ports declared at all — fall back to connect-per-part
-            connects = re.findall(
-                r"\bconnect\s+\w+\.\w+\s+to\s+\w+\.\w+", text, re.IGNORECASE
-            )
-            # Tighter denominator: expect 1.5 connects per part
-            connect_density = min(1.0, len(connects) / max(n * 1.5, 1))
-
-        # ── Instance connectivity ────────────────────────────────────────
-        # Structural/passive parts (airframe, chassis, frame, …) represent
-        # physical housing and may legitimately have no data-flow connections.
-        # Exclude them from the dangling check to avoid false penalties.
+        # ── Instance connectivity ───────────────────────────────
+        # Structural/passive parts (airframe, chassis, frame, ...) are physical
+        # housing and may have no data-flow connections, so they are excluded
+        # from the dangling check.
         _STRUCTURAL_KW = {"airframe", "chassis", "frame", "fuselage", "housing",
                           "enclosure", "structure", "hull"}
         part_usage_re = re.compile(r"\bpart\s+(\w+)\s*:\s*(\w+)\s*;")
-        connect_instance_re = re.compile(
-            r"\bconnect\s+(\w+)\.\w+\s+to\s+(\w+)\.\w+", re.IGNORECASE
-        )
-        # Build instance→type map, exclude structural parts from denominator
         inst_type: Dict[str, str] = {}
         for m in part_usage_re.finditer(text):
             inst_type[m.group(1)] = m.group(2)
@@ -883,191 +800,218 @@ class DesignEvaluator:
                        for kw in _STRUCTURAL_KW)
         }
         connected: set = set()
-        for m in connect_instance_re.finditer(text):
-            connected.add(m.group(1))
-            connected.add(m.group(2))
+        for stmt in parse_connects(text):
+            connected.add(stmt.src_inst)
+            connected.add(stmt.tgt_inst)
         instance_conn = (
             len(functional & connected) / max(len(functional), 1)
             if functional else 0.0
         )
 
-        # Architectural fragmentation (disconnected sub-graphs) is already
-        # covered by instance_conn (connect coverage), the reachability
-        # simulation, and the diagnostics disconnected-component check, so it
-        # is not scored again here to avoid double-penalising.
+        # Architectural fragmentation is already covered by instance_conn, the
+        # reachability simulation and the diagnostics disconnected-component
+        # check, so it is not scored again here.
         return (
             0.40 * port_cov
             + 0.40 * attr_cov
             + 0.20 * instance_conn
         )
 
-    # ------------------------------------------------------------------
-    # Dimension 3b: Behavioral Verification (30 %) — new
-    # ------------------------------------------------------------------
-
     def _score_behavioral_verification(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Primary quality signal: combines structural reachability and state-machine
-        execution results from the SimulationResult passed into evaluate().
-
-          0.4 × structural_reachability  — scenario pass rate
-          0.6 × behavioral_sim_score     — state-machine execution pass rate
-
-        Returns 1.0 (N/A) when no sim_result is available.
-        """
         sim = getattr(self, "_sim_result", None)
         if sim is None:
             return 1.0
 
-        structural = float(getattr(sim, "reachability_score", 1.0))
+        requirement_structural = getattr(
+            sim, "requirement_reachability_score", None
+        )
+        structural = float(
+            requirement_structural
+            if requirement_structural is not None
+            else getattr(sim, "reachability_score", 1.0)
+        )
 
         br = getattr(sim, "behavioral_result", None)
         if br is not None and getattr(br, "extracted_sm_count", 0) > 0:
-            behavioral = float(getattr(br, "sim_score", 1.0))
+            # Trace-first, like the structural term: score the scenarios that trace
+            # to the requirement set, falling back to the overall pass rate only
+            # when none carry the tag. Otherwise scenarios rendered from contract
+            # chains (passing by construction) dilute the denominator asymmetrically
+            # across configurations: 13.0 scenarios per contract-arm cell against 5.3.
+            scenarios = list(getattr(br, "scenario_results", ()) or ())
+            traced = [
+                item for item in scenarios
+                if "requirement_behavior" in (getattr(item, "tags", ()) or ())
+            ]
+            if traced:
+                behavioral = sum(
+                    1.0 for item in traced if getattr(item, "passed", False)
+                ) / len(traced)
+            else:
+                behavioral = float(getattr(br, "sim_score", 1.0))
         else:
-            behavioral = 1.0  # no state machines → N/A
+            behavioral = 1.0
 
         return 0.40 * structural + 0.60 * behavioral
-
-    # ------------------------------------------------------------------
-    # Dimension 4: Safety Assurance (15 %)
-    # ------------------------------------------------------------------
 
     def _score_safety_assurance(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Four weighted sub-metrics (only applied when SAFE requirements exist):
-          state_machine_coverage (40 %) — state defs per SAFE requirement
-          fault_transitions      (25 %) — transitions to fault/failsafe states
-          override_path          (20 %) — overrideCmd port present AND connected
-          emergency_actions      (15 %) — action defs for emergency behaviours
+        """Three structural, requirement-anchored sub-metrics (only when SAFE
+        requirements exist):
+
+          state_machine_coverage (40 %) -- state defs per SAFE requirement
+          fault_coverage         (35 %) -- fraction of SAFE requirements whose
+                                           satisfying parts carry at least one
+                                           guarded transition (the behavioural
+                                           simulator's own definition of a
+                                           fault transition)
+          safety_connectivity    (25 %) -- fraction of SAFE-satisfying parts
+                                           with at least one connected instance
+
+        Each sub-metric is a fraction over the requirement set or the parts that
+        satisfy it, so the denominator is fixed by the frozen input and comparable
+        across configurations; none consults a name. The two lexical sub-metrics
+        dropped here (a port named overrideCmd, action names containing
+        emergency/failsafe/...) scored zero for models implementing the same
+        behaviour under their own vocabulary, and the transition count saturated
+        for whichever configuration emitted the most.
         """
         safe_reqs = [r for r in model.requirement_definitions if "_SAFE_" in r.name]
         if not safe_reqs:
-            return 1.0  # no safety requirements — dimension N/A
+            return 1.0
 
         n_safe = len(safe_reqs)
         text = _sysml_text(model)
 
-        # ── State-machine coverage (tighter — 1:1 with SAFE reqs) ────────
-        # Was: state_defs / max(n_safe / 1.5, 1) — 3 SAFE reqs only need 2 states
-        # Now: state_defs / n_safe — every SAFE req should have its own state def
         n_sd = self._syside_count("StateDefinition")
         state_defs = n_sd if n_sd is not None else len(re.findall(r"\bstate\s+def\s+\w+", text))
         state_cov = min(1.0, state_defs / max(n_safe, 1))
 
-        # ── Fault transitions (SysML v2: first/then syntax) ─────────────
-        # Counts ALL guard-based transitions (`first X if <guard> then Y`)
-        # regardless of target-state naming.  In the generation pipeline
-        # (chain_of_thought templates), nominal phase chains are driven by
-        # `accept CMD_*` while guard transitions appear only in fault
-        # monitors / safety arbiters — so "guard transition" is the
-        # structural definition of a fault transition.  Filtering by target
-        # name (Fault/Fail/Emergency…) missed the template's XxxDetected /
-        # ArbXxxMode naming and scored 0 systematically; min(1.0, …) caps
-        # any over-count so the looser match is safe.
-        fault_tx = len(re.findall(
-            r"\btransition\s+\w+\s+first\s+\w+\s+if\s+[^;]+?\s+then\s+\w+\s*;",
-            text, re.IGNORECASE | re.DOTALL,
-        ))
-        fault_tx_score = min(1.0, fault_tx / max(n_safe, 1))
+        # -- Fault coverage: per-requirement, shape-neutral ---------------
+        # A SAFE requirement is covered when a part satisfying it carries a
+        # behavioural safety anchor in its own body: a guarded transition
+        # (a triggered fail-safe) or a state definition (an invariant pattern -
+        # a start-up inhibit or lock-until-release is anchored by a latch or
+        # default-locked machine and has no fault transition). Coverage is
+        # over the requirement set: a SAFE requirement no part satisfies is
+        # uncovered, and many anchors on one requirement cover that one.
+        # Whether the anchored behaviour executes correctly belongs to the
+        # behavioural-verification dimension.
+        def _part_body(name: str) -> str:
+            span = named_block_span(text, "part", name)
+            return text[span[0] + 1:span[1]] if span else ""
 
-        # ── Override-command path ────────────────────────────────────────
-        has_override_port = bool(re.search(r"\boverrideCmd\b", text))
-        # Also check it appears in a connect statement (SysML v2 dot notation)
-        override_connected = bool(re.search(
-            r"\bconnect\s+\w+\.overrideCmd\s+to|to\s+\w+\.overrideCmd\b",
-            text, re.IGNORECASE,
-        ))
-        override_score = (0.5 if has_override_port else 0.0) + (0.5 if override_connected else 0.0)
+        # Satisfy links are read from each part's own body text: the lite
+        # model does not populate satisfied_requirements on every path, and
+        # the text is the committed artefact anyway.
+        satisfy_re = re.compile(r"\bsatisfy\s+(?:requirement\s+)?([\w:]+)\s*;")
+        parts_by_req: Dict[str, list] = {}
+        for part in model.part_definitions:
+            for req in satisfy_re.findall(_part_body(part.name)):
+                parts_by_req.setdefault(req.split("::")[-1], []).append(part)
 
-        # ── Emergency action defs (tighter — 1 per 1.5 SAFE reqs) ────────
-        # Was: emerg_actions / max(n_safe / 3.0, 1) — 6 SAFE reqs only need 2 actions
-        # Now: emerg_actions / max(n_safe / 1.5, 1)
-        _emerg_kws = ("emergency", "autoland", "emergland", "emergstop", "shutdown", "failsafe")
-        sm_obj = getattr(self, "_syside_model", None)
-        if sm_obj is not None and _SYSIDE_EVAL_OK:
-            ad_cls = getattr(_syside_eval, "ActionDefinition", None)
-            if ad_cls is not None:
-                emerg_actions = sum(
-                    1 for ad in sm_obj.nodes(ad_cls)
-                    if any(kw in (ad.name or "").lower() for kw in _emerg_kws)
-                )
-            else:
-                emerg_actions = len(re.findall(
-                    r"action\s+def\s+\w*(?:emergency|autoLand|emergLand|emergStop|shutdown|failsafe)\w*",
-                    text, re.IGNORECASE,
-                ))
+        def _satisfying_parts(req_name: str) -> list:
+            return [
+                part
+                for key, items in parts_by_req.items()
+                if req_name in key or key in req_name
+                for part in items
+            ]
+
+        state_def_re = re.compile(r"\bstate\s+def\s+\w+")
+        covered = 0
+        for req in safe_reqs:
+            for part in _satisfying_parts(req.name):
+                part_text = _part_body(part.name)
+                if (
+                    _GUARDED_TRANSITION.search(part_text)
+                    or state_def_re.search(part_text)
+                ):
+                    covered += 1
+                    break
+        fault_coverage = covered / n_safe
+
+        safe_part_names = {
+            part.name
+            for req in safe_reqs
+            for part in _satisfying_parts(req.name)
+        }
+        if safe_part_names:
+            part_usage_re = re.compile(r"\bpart\s+(\w+)\s*:\s*(\w+)\s*;")
+            instances_of: Dict[str, set] = {}
+            for m in part_usage_re.finditer(text):
+                usage_name, type_name = m.group(1), m.group(2)
+                instances_of.setdefault(type_name, set()).add(usage_name)
+                # A usage retyped to a catalogue implementation (``Impl :> Planned``)
+                # is still a usage of the planned type (structural_obligations.py
+                # codifies this). Credit the specialisation chain, or the DSE-selected
+                # design counts its own SAFE part as unwired: propulsionSystem retyped
+                # to Catalog_*Impl read safety_connectivity 3/4 on a fully wired model.
+                seen: set = set()
+                base_names = list(_specialization_bases(text, type_name))
+                while base_names:
+                    base = base_names.pop().split("::")[-1]
+                    if base in seen:
+                        continue
+                    seen.add(base)
+                    instances_of.setdefault(base, set()).add(usage_name)
+                    base_names.extend(_specialization_bases(text, base))
+            connected_instances: set = set()
+            for stmt in parse_connects(text):
+                connected_instances.add(stmt.src_inst)
+                connected_instances.add(stmt.tgt_inst)
+            wired = sum(
+                1 for name in safe_part_names
+                if instances_of.get(name, set()) & connected_instances
+            )
+            safety_connectivity = wired / len(safe_part_names)
         else:
-            emerg_actions = len(re.findall(
-                r"action\s+def\s+\w*(?:emergency|autoLand|emergLand|emergStop|shutdown|failsafe)\w*",
-                text, re.IGNORECASE,
-            ))
-        emerg_score = min(1.0, emerg_actions / max(n_safe / 1.5, 1))
+            safety_connectivity = 0.0
 
         return (
             0.40 * state_cov
-            + 0.25 * fault_tx_score
-            + 0.20 * override_score
-            + 0.15 * emerg_score
+            + 0.35 * fault_coverage
+            + 0.25 * safety_connectivity
         )
-
-    # ------------------------------------------------------------------
-    # Dimension 5: Interface Quality (5 %)
-    # ------------------------------------------------------------------
 
     def _score_interface_quality(
         self,
         config: DesignConfiguration,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> float:
-        """
-        Three sub-metrics:
-          external_typing  (50 %) — INTF-external ports using specialised types
-                                    (internal DataPort is legitimate, not penalised)
-          fan_in_free      (30 %) — penalise fan-in violations
-          direction_cov    (20 %) — fraction of parts with all ports directed
-        """
         text = _sysml_text(model)
-        parts = model.part_definitions
+        parts = _scoreable_parts(model.part_definitions)
 
-        # ── External port typing ─────────────────────────────────────────
-        # Only penalise DataPort on ports belonging to components that satisfy
-        # INTF requirements.  Internal inter-component ports legitimately use
-        # DataPort and should not be counted against this score.
+        # ── External port typing ───────────────────────────────
+        # Penalise DataPort only on ports of components that satisfy INTF
+        # requirements; internal inter-component ports use DataPort and are
+        # not counted against this score.
         intf_parts: Set[str] = set()
         for part in model.part_definitions:
-            # satisfy_relationships is the correct attribute (List[SatisfyRelationship]);
-            # each relation's target.name looks like "REQ_INTF_001".
             for rel in getattr(part, "satisfy_relationships", []):
                 req_name = (rel.target.name if rel.target else "") or ""
                 if "_INTF_" in req_name:
                     intf_parts.add(part.name)
                     break
 
-        # Collect port usages only from INTF parts (via text scan of their blocks)
         if intf_parts:
             intf_port_types: List[str] = []
             for pname in intf_parts:
-                block_re = re.compile(
-                    rf"\bpart\s+def\s+{re.escape(pname)}\s*\{{(.*?)\n\s*\}}",
-                    re.DOTALL,
-                )
-                m = block_re.search(text)
-                if m:
+                span = named_block_span(text, "part", pname)
+                if span:
                     intf_port_types += re.findall(
                         r"(?:in|out|inout)\s+port\s+\w+\s*:\s*(\w+)",
-                        m.group(1), re.IGNORECASE,
+                        text[span[0] + 1:span[1]], re.IGNORECASE,
                     )
             if intf_port_types:
                 n_generic = sum(
@@ -1078,7 +1022,6 @@ class DesignEvaluator:
             else:
                 type_consistency = 0.5
         else:
-            # No INTF parts identified — fall back to checking all ports lightly
             all_usage_types = re.findall(
                 r"(?:in|out|inout)\s+port\s+\w+\s*:\s*(\w+)", text, re.IGNORECASE
             )
@@ -1091,21 +1034,17 @@ class DesignEvaluator:
             else:
                 type_consistency = 0.0
 
-        # ── Fan-in freedom (port-level regex count) ──────────────────────
-        # Fan-in is a port-level concern: multiple sources → same target port.
+        # ── Fan-in freedom (port-level regex count) ──────────────────
+        # Fan-in is a port-level concern: multiple sources -> same target port.
         # The instance-level graph cannot detect this (multiple edges to the
         # same instance is expected and valid).
-        connects_fi = re.findall(
-            r"\bconnect\s+\w+\.(\w+)\s+to\s+(\w+)\.(\w+)", text, re.IGNORECASE
-        )
         target_count: Dict[str, int] = {}
-        for _, tgt_inst, tgt_port in connects_fi:
-            key = f"{tgt_inst}::{tgt_port}"
+        for stmt in parse_connects(text):
+            key = f"{stmt.tgt_inst}::{stmt.tgt_port}"
             target_count[key] = target_count.get(key, 0) + 1
         fan_in_violations = sum(1 for c in target_count.values() if c > 1)
         fan_in_score = max(0.0, 1.0 - fan_in_violations * 0.40)
 
-        # ── Port direction coverage ──────────────────────────────────────
         if not parts:
             direction_cov = 0.0
         else:
@@ -1117,32 +1056,31 @@ class DesignEvaluator:
                 ):
                     return True
                 # Text fallback: count directed port keywords in part def body.
-                # Mirrors _has_directed_port — handles direction=NONE from syside
+                # Mirrors _has_directed_port - handles direction=NONE from syside
                 # when direction is declared in a port def body rather than inline.
-                part_block_re = re.compile(
-                    rf"\bpart\s+def\s+{re.escape(part.name)}\s*\{{(.*?)\n\s*\}}",
-                    re.DOTALL,
-                )
-                m = part_block_re.search(text)
-                if not m or not part.ports:
+                span = named_block_span(text, "part", part.name)
+                if span is None or not part.ports:
+                    # A part with no ports of its own may still inherit a
+                    # fully-directed interface through specialisation
+                    # (Impl :> Planned - the variant emitter's contract).
+                    if not part.ports:
+                        return _directed_via_specialization(
+                            text, part.name, _all_directed,
+                            {p.name: p for p in parts},
+                        )
                     return False
-                body = m.group(1)
+                body = text[span[0] + 1:span[1]]
                 directed_count = len(re.findall(
                     r"\b(?:in|out|inout)\s+port\s+\w+", body, re.IGNORECASE
                 ))
                 return directed_count >= len(part.ports)
             direction_cov = sum(1 for p in parts if _all_directed(p)) / len(parts)
 
-        # ── Connect type consistency (AST port type_ref matching) ─────────
-        # For each connect X.portA to Y.portB, resolve both port type names
-        # and flag domain mismatches (data ↔ power) or exact type mismatches.
         port_type_map = _build_port_type_map(model)
-        connects_typed = re.findall(
-            r"\bconnect\s+\w+\.(\w+)\s+to\s+\w+\.(\w+)", text, re.IGNORECASE
-        )
         type_mismatches = 0
         type_checked = 0
-        for src_port, tgt_port in connects_typed:
+        for _stmt in parse_connects(text):
+            src_port, tgt_port = _stmt.src_port, _stmt.tgt_port
             src_type = port_type_map.get(src_port)
             tgt_type = port_type_map.get(tgt_port)
             if src_type and tgt_type:
@@ -1157,79 +1095,19 @@ class DesignEvaluator:
             + 0.20 * direction_cov
         )
 
-    # ------------------------------------------------------------------
-    # Diagnostics — model-aware, MCTS-aware
-    # ------------------------------------------------------------------
-
     def _diagnose(
         self,
         model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration],
+        dse_config: Optional[DesignConfiguration],
     ) -> Tuple[List[str], List[str]]:
         return _diagnose_impl(
             model,
-            mcts_config,
+            dse_config,
             syside_attr_map=getattr(self, "_syside_attr_map", {}),
             n_state_defs=self._syside_count("StateDefinition"),
             syside_model=getattr(self, "_syside_model", None),
+            syntax_result=getattr(self, "_cached_syntax_result", None),
         )
-
-    # ------------------------------------------------------------------
-    # Dim 7: behavioral_reachability
-    # ------------------------------------------------------------------
-
-    def _score_behavioral_reachability(
-        self,
-        config: DesignConfiguration,
-        model: SysMLModel,
-        mcts_config: Optional[DesignConfiguration] = None,
-    ) -> float:
-        """
-        Build a port-connection graph from the parsed SysMLModel and check
-        whether key operational scenarios have directed paths.
-
-        Returns 1.0 (N/A) when networkx is unavailable or no parts exist.
-        Falls back to 0.5 on any unexpected error so as not to penalise models
-        whose connectivity is simply not yet characterised.
-        """
-        if not _HAS_NX:
-            return 1.0
-        if not model.part_definitions:
-            return 1.0
-
-        try:
-            from src.simulation.extractor import extract_behavioral_graph
-            from src.simulation.exec_graph import build_exec_graph
-            from src.simulation.scenarios import select_scenarios, DRONE_SCENARIOS
-            from src.simulation.simulator import ScenarioSimulator
-            from src.simulation.validator import _compute_score
-
-            raw_text = _sysml_text(model)
-            if not raw_text:
-                return 1.0
-            bg = extract_behavioral_graph(raw_text)
-            if not bg.parts:
-                return 1.0
-
-            G = build_exec_graph(bg)
-            scenarios = select_scenarios(bg, predefined=DRONE_SCENARIOS)
-            if not scenarios:
-                return 1.0
-
-            sim = ScenarioSimulator(G)
-            results = sim.run_all(scenarios)
-            return _compute_score(results, [], len(bg.parts))
-
-        except Exception:
-            return 0.5
-
-    # ------------------------------------------------------------------
-    # Legacy compatibility shims
-    # ------------------------------------------------------------------
-
-    def add_criterion(self, criterion: EvaluationCriteria) -> None:
-        """No-op shim kept for backward compatibility."""
-        self.criteria.append(criterion)
 
     def simple_score(self, config: DesignConfiguration) -> Dict[str, float]:
         """
@@ -1239,8 +1117,8 @@ class DesignEvaluator:
         param_count = len(config.parameters)
         return {
             "requirement_satisfaction": min(1.0, param_count / 5.0),
-            "mcts_fidelity":           1.0,   # N/A without model
+            "dse_fidelity":           1.0,
             "structural_quality":      min(1.0, param_count / 5.0),
             "interface_consistency":   0.75,
-            "requirement_traceability": 0.70,  # legacy key name
+            "requirement_traceability": 0.70,
         }

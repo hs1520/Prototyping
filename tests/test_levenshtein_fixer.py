@@ -1,23 +1,16 @@
-"""
-tests/test_levenshtein_fixer.py
+"""Unit tests for src/simulation/levenshtein_fixer.py.
 
-Unit tests for src/simulation/levenshtein_fixer.py.
+The module is loaded directly (bypassing src/__init__.py) so the test works
+without optional deps like python-dotenv.
 
 Run with:
     python tests/test_levenshtein_fixer.py
-
-The module is loaded directly (bypassing src/__init__.py) so that
-the test works even when optional deps like python-dotenv are absent.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import src.simulation.levenshtein_fixer as _mod
 from src.simulation.levenshtein_fixer import (
     levenshtein,
     build_vocab,
@@ -25,10 +18,6 @@ from src.simulation.levenshtein_fixer import (
     format_hints_for_llm,
 )
 
-
-# ---------------------------------------------------------------------------
-# Minimal helpers
-# ---------------------------------------------------------------------------
 
 _PASS = 0
 _FAIL = 0
@@ -45,10 +34,6 @@ def ok(name: str, cond: bool, msg: str = "") -> None:
     # Enforce under pytest too (standalone still prints the running tally above).
     assert cond, f"{name}: {msg}"
 
-
-# ---------------------------------------------------------------------------
-# Base model (all names correct)
-# ---------------------------------------------------------------------------
 
 SYSML = """\
 package DroneSystem {
@@ -70,16 +55,11 @@ package DroneSystem {
 
 
 def _line_of(text: str, substring: str) -> int:
-    """Return 1-indexed line number of the first line containing *substring*."""
     for i, line in enumerate(text.split("\n"), 1):
         if substring in line:
             return i
     raise ValueError(f"{substring!r} not found in text")
 
-
-# ---------------------------------------------------------------------------
-# T1 – Levenshtein distances
-# ---------------------------------------------------------------------------
 
 def test_levenshtein_distances():
     print("T1  levenshtein distances")
@@ -91,10 +71,6 @@ def test_levenshtein_distances():
     ok("d1_sub",      levenshtein("portA", "portB")          == 1)
     ok("d2_two",      levenshtein("battryCharg", "batteryCharge")  == 2)
 
-
-# ---------------------------------------------------------------------------
-# T2 – build_vocab
-# ---------------------------------------------------------------------------
 
 def test_build_vocab():
     print("T2  build_vocab")
@@ -108,14 +84,9 @@ def test_build_vocab():
     ok("inst2def_bm",   v.instance_to_def.get("bm") == "BatteryMonitor")
 
 
-# ---------------------------------------------------------------------------
-# T3 – d=1 auto-fix: port typo in connect statement
-# ---------------------------------------------------------------------------
-
 def test_fix_d1_port_typo():
-    """Declaration stays correct; only the connect reference has the typo."""
     print("T3  try_fix d=1 (port typo in connect)")
-    typo = SYSML.replace("bm.powerOut", "bm.powerOt")   # d=1 from powerOut
+    typo = SYSML.replace("bm.powerOut", "bm.powerOt")
     ln = _line_of(typo, "connect")
     errs = [{"line": ln, "col": 0, "message": "No Feature named 'powerOt' found.", "code": ""}]
 
@@ -127,13 +98,8 @@ def test_fix_d1_port_typo():
     ok("unch_empty",  r.unchanged == [],                               f"unch={r.unchanged}")
 
 
-# ---------------------------------------------------------------------------
-# T4 – d=2 hint: type name typo
-# ---------------------------------------------------------------------------
-
 def test_fix_d2_hint_type():
     print("T4  try_fix d=2 hint (type name)")
-    # 'FlghtControler' is 2 edits from 'FlightController'
     typo = SYSML.replace("part fc : FlightController", "part fc : FlghtControler")
     ln = _line_of(typo, "FlghtControler")
     errs = [{"line": ln, "col": 0, "message": "No Type named 'FlghtControler' found.", "code": ""}]
@@ -144,10 +110,6 @@ def test_fix_d2_hint_type():
     ok("hint_sugg",   r.hints[0]["_suggestion"] == "FlightController",
                       f"sugg={r.hints[0].get('_suggestion') if r.hints else None}")
 
-
-# ---------------------------------------------------------------------------
-# T5 – format_hints_for_llm
-# ---------------------------------------------------------------------------
 
 def test_format_hints():
     print("T5  format_hints_for_llm")
@@ -162,13 +124,8 @@ def test_format_hints():
     ok("sugg_in_blk",  "FlightController"  in block)
 
 
-# ---------------------------------------------------------------------------
-# T6 – d=1 auto-fix: type name typo
-# ---------------------------------------------------------------------------
-
 def test_fix_d1_type_typo():
     print("T6  try_fix d=1 (type name)")
-    # 'FlightControler' = one 'l' deleted from 'FlightController' → d=1
     typo = SYSML.replace("part fc : FlightController", "part fc : FlightControler")
     ln = _line_of(typo, "FlightControler")
     errs = [{"line": ln, "col": 0, "message": "No Type named 'FlightControler' found.", "code": ""}]
@@ -177,13 +134,8 @@ def test_fix_d1_type_typo():
     ok("type_auto",    len(r.auto_fixed) == 1,                               f"auto={r.auto_fixed}")
     ok("type_sugg",    r.auto_fixed[0]["_suggestion"] == "FlightController",
                        f"sugg={r.auto_fixed[0].get('_suggestion') if r.auto_fixed else None}")
-    # Patched: usage site now reads FlightController; the def line still has FlightController
     ok("type_patched", r.fixed_text.count("FlightController") >= 2)
 
-
-# ---------------------------------------------------------------------------
-# T7 – unrecognised error pattern → passed through unchanged
-# ---------------------------------------------------------------------------
 
 def test_unrecognised_error():
     print("T7  unrecognised error pass-through")
@@ -193,10 +145,6 @@ def test_unrecognised_error():
        len(r.unchanged) == 1 and r.auto_fixed == [] and r.hints == [])
 
 
-# ---------------------------------------------------------------------------
-# T8 – empty vocab → unchanged
-# ---------------------------------------------------------------------------
-
 def test_empty_vocab():
     print("T8  empty vocab edge case")
     minimal = "package X {}"
@@ -205,22 +153,14 @@ def test_empty_vocab():
     ok("empty_vocab_skip", r.unchanged == errs)
 
 
-# ---------------------------------------------------------------------------
-# T9 – exact name (d=0) is NOT self-corrected
-# ---------------------------------------------------------------------------
-
 def test_no_self_correction():
     print("T9  exact name not self-corrected")
-    # 'powerOut' is a declared feature; if syside reports it as an error
-    # (shouldn't happen in practice), we must NOT replace it with itself.
+    # 'powerOut' is a declared feature; if syside reports it as an error it is not
+    # replaced with itself.
     errs = [{"line": 13, "col": 0, "message": "No Feature named 'powerOut' found.", "code": ""}]
     r = try_fix_sema_errors(SYSML, errs)
     ok("d0_skip", r.auto_fixed == [])
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     test_levenshtein_distances()

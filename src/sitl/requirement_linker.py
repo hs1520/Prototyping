@@ -1,34 +1,32 @@
-"""
-requirement_linker.py
+"""requirement_linker.py
 
 Maps SysML requirements to ArduPilot parameters and SITL test specs.
 
-核心设计原则（重构后）：
-  以 guard / attribute 内容作为语义锚点，不依赖 REQ ID 字符串。
-
-  REQ ID 是 LLM 自由命名的标签，跨系统、跨运行不稳定。
-  guard 内容（operator + variable keywords + threshold）才是不变的语义。
+语义锚点是 guard / attribute 内容，不是 REQ ID：REQ ID 由 LLM 自由命名，
+跨系统跨运行不稳定；guard 内容（operator + variable keywords + threshold）
+才稳定。
 
 映射流程：
   part.satisfy(REQ_X)
-    → 取该 part 的状态机 guard（e.g. batterySoc <= 25.0）
-    → 按 guard 内容（operator=<= + var 含 battery）匹配 _CONTENT_CATALOGUE
-    → 得到 ArduPilot 参数（BATT_FS_LOW_PCT = 25.0）
-    → REQ ID 仅用于测试脚本的标签，不参与匹配逻辑
+    -> 取该 part 的状态机 guard（e.g. batterySoc <= 25.0）
+    -> 按 guard 内容（operator=<= + var 含 battery）匹配 _CONTENT_CATALOGUE
+    -> 得到 ArduPilot 参数（BATT_FS_LOW_PCT = 25.0）
+    -> REQ ID 只作测试脚本的标签
 
 五层 Fallback（内容优先）：
-  层1  guard/attr 内容匹配（_CONTENT_CATALOGUE）← 最健壮
+  层1  guard/attr 内容匹配（_CONTENT_CATALOGUE）
   层2  AST 合成器（guard 变量名关键词）
   层3  LLM 状态机语义分类
   层3b LLM 需求文本直接推断
-  层4  全部失败 → unmapped
+  层4  全部失败 -> unmapped
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
+from dataclasses import dataclass, replace
+from types import MappingProxyType
+from typing import Dict, List, Optional, Any, Mapping, Tuple
 
 from src.sysml.lite_model import SysMLLiteModel
 from src.sitl.sitl_specs import InjectSpec, VerifySpec
@@ -41,466 +39,346 @@ except ImportError:
     _SYSIDE_OK = False
 
 
-# ---------------------------------------------------------------------------
-# 内容匹配器数据结构
-# ---------------------------------------------------------------------------
-
-@dataclass
-class GuardMatcher:
-    """
-    按 guard 内容匹配（与 REQ ID 无关）。
-
-    operators     : 匹配的比较运算符列表；["bool"] 代表 bool_true guard
-    var_keywords  : guard 变量名（小写）必须包含其中任一关键词
-    threshold_min : 阈值下界（comparison guard）
-    threshold_max : 阈值上界（comparison guard）
-    action_kws    : 可选，进一步用 entry action 名区分同类 guard（如区分
-                    SENSOR_ARMING_INHIBIT vs SENSOR_GROUND_ALERT）
-    """
-    operators: List[str]
-    var_keywords: List[str]
-    threshold_min: float = float("-inf")
-    threshold_max: float = float("inf")
-    action_kws: List[str] = field(default_factory=list)
+from src.sitl.sitl_catalogue import (
+    _CONTENT_CATALOGUE,
+    _TAG_TO_ENTRY,
+    ContentEntry,
+    GuardMatcher,
+)
 
 
-@dataclass
-class AttrMatcher:
-    """
-    按 part 属性名内容匹配（与 REQ ID 无关）。
-
-    attr_keywords : 属性名（小写）必须包含其中任一关键词
-    part_keywords : 可选，part 名（小写）必须包含其中任一关键词（防止跨部件误匹配）
-    multiplier    : 单位换算系数（如 km→m 用 1000，m/s→cm/s 用 100）
-    """
-    attr_keywords: List[str]
-    part_keywords: List[str] = field(default_factory=list)
-    multiplier: float = 1.0
-
-
-@dataclass
-class ContentEntry:
-    """
-    内容驱动的 Catalogue 条目。
-
-    匹配键：guard 内容或 attr 内容，而非 REQ ID 字符串。
-
-    ardu_params 值语义：
-      "@guard"       → 匹配 guard 的阈值（comparison guard 时）
-      "@attr_match"  → 匹配到的属性值（AttrMatcher 时）
-      "@attr_match*N"→ 同上 × N
-      "@attr:name"   → 按名字关键词搜索的属性（独立于 AttrMatcher）
-      "@attr:name*N" → 同上 × N
-      number         → 静态固定值
-    """
-    semantic_tag: str
-    guard_matcher: Optional[GuardMatcher] = None
-    attr_matcher: Optional[AttrMatcher] = None
-    ardu_params: Dict[str, Any] = field(default_factory=dict)
-    tier: str = "L1"
-    inject: Optional[Any] = None
-    verify: Optional[Any] = None
-    notes: str = ""
-
-
-def _noop_l1() -> Dict[str, Any]:
-    return {
-        "inject": InjectSpec(kind="noop"),
-        "verify": VerifySpec(kind="noop"),
-    }
-
-
-# ---------------------------------------------------------------------------
-# 内容驱动的 Catalogue（替代旧的 _REQ_CATALOGUE: Dict[str, ...]）
-#
-# 顺序重要：优先级高（更具体）的条目放前面。
-# ---------------------------------------------------------------------------
-
-_CONTENT_CATALOGUE: List[ContentEntry] = [
-
-    # ── Safety: battery RTB（reaches X%）
-    #    LLM 对"达到某阈值"倾向于用 <= 运算符
-    ContentEntry(
-        semantic_tag="BATTERY_RTB",
-        guard_matcher=GuardMatcher(
-            operators=["<="],
-            var_keywords=["battery", "soc", "charge", "volt"],
-            # threshold_min=20 区分 RTB（高阈值）vs LAND（低阈值）
-            threshold_min=20.0,
-        ),
-        ardu_params={"BATT_FS_LOW_PCT": "@guard", "BATT_FS_LOW_ACT": 2},
-        tier="L1",
-        **_noop_l1(),
-        notes="Battery-RTB guard (<=) → BATT_FS_LOW_PCT.",
-    ),
-
-    # ── Safety: battery critical landing（falls below X%）
-    #    LLM 对"低于"倾向于用 < 运算符
-    ContentEntry(
-        semantic_tag="BATTERY_LAND",
-        guard_matcher=GuardMatcher(
-            operators=["<", "<="],
-            var_keywords=["battery", "soc", "charge", "volt"],
-            threshold_max=20.0,  # 低阈值 → critical land
-        ),
-        ardu_params={"BATT_FS_CRT_PCT": "@guard", "BATT_FS_CRT_ACT": 1},
-        tier="L1",
-        **_noop_l1(),
-        notes="Battery-critical guard (<) → BATT_FS_CRT_PCT.",
-    ),
-
-    # ── Safety: GCS link-loss（commLossTime > X s）
-    ContentEntry(
-        semantic_tag="GCS_LOSS",
-        guard_matcher=GuardMatcher(
-            operators=[">", ">="],
-            var_keywords=["comm", "gcs", "link", "heartbeat", "loss"],
-        ),
-        ardu_params={"FS_GCS_ENABLE": 1, "FS_GCS_TIMEOUT": "@guard"},
-        tier="L2",
-        inject=InjectSpec(kind="disconnect_gcs", pre_takeoff_m=5.0),
-        verify=VerifySpec(
-            kind="wait_mode",
-            args={"mode": "LAND", "fallback": "RTL"},
-            timeout=25.0,
-        ),
-        notes="GCS timeout guard → FS_GCS_TIMEOUT + L2 disconnect test.",
-    ),
-
-    # ── Safety: sensor arming inhibit（bool: sensorSelfTestFailed）
-    #    action_kws 区分 "inhibit arming" vs "ground alert"
-    ContentEntry(
-        semantic_tag="SENSOR_ARMING_INHIBIT",
-        guard_matcher=GuardMatcher(
-            operators=["bool"],
-            var_keywords=["sensor", "selftest", "post", "prearm"],
-            action_kws=["inhibit", "arm", "block", "prevent"],
-        ),
-        ardu_params={"ARMING_CHECK": 1},
-        tier="L2",
-        inject=InjectSpec(
-            kind="set_param",
-            params={"GPS_TYPE": 0.0, "_settle_s": 5.0, "_pre_mode": "GUIDED"},
-        ),
-        verify=VerifySpec(kind="assert_arm_rejected", timeout=6.0),
-        notes="Sensor self-test failure → ARMING_CHECK; verify arm rejected.",
-    ),
-
-    # ── Safety: sensor ground alert（bool: sensorSelfTestFailed，但 action 是 alert/report）
-    ContentEntry(
-        semantic_tag="SENSOR_GROUND_ALERT",
-        guard_matcher=GuardMatcher(
-            operators=["bool"],
-            var_keywords=["sensor", "selftest", "post", "prearm"],
-            action_kws=["alert", "report", "transmit", "notify", "ground"],
-        ),
-        ardu_params={},  # ArduPilot 原生发 STATUSTEXT，无需设参
-        tier="L2",
-        inject=InjectSpec(
-            kind="set_param",
-            params={"GPS_TYPE": 0.0, "_settle_s": 3.0, "_pre_mode": "GUIDED"},
-        ),
-        verify=VerifySpec(
-            kind="wait_statustext",
-            args={"keyword": ["prearm", "PreArm", "gps", "sensor"]},
-            timeout=10.0,
-        ),
-        notes="Sensor failure → GCS alert (STATUSTEXT).",
-    ),
-
-    # ── Safety: parachute deploy（bool: propulsionCriticalFailure）
-    ContentEntry(
-        semantic_tag="PARACHUTE_DEPLOY",
-        guard_matcher=GuardMatcher(
-            operators=["bool"],
-            var_keywords=["propulsion", "engine", "motor", "thrust"],
-        ),
-        ardu_params={
-            "CHUTE_ENABLED": 1,
-            "CHUTE_TYPE": 10,          # 10 = servo-released parachute
-            "CHUTE_DELAY_MS": "@attr:parachute*1000",
-            # SERVO8=Parachute → Gazebo channel 7（避开 gimbal 占用的 SERVO9-11）
-            "SERVO8_FUNCTION": 27,     # 27 = k_parachute
-            "CHUTE_SERVO_ON": 2000,    # PWM 2000 → COMMAND 归一化 1.0 → ParachutePlugin(>0.9) 部署
-            "CHUTE_SERVO_OFF": 1000,   # PWM 1000 → 归一化 0.0（安全位）
-        },
-        tier="L2",
-        inject=InjectSpec(
-            kind="mavlink_command",
-            # MAV_CMD_DO_PARACHUTE (208): param1=2 → RELEASE
-            # 直接命令释放，native SITL 立即回 STATUSTEXT "Parachute: Released"
-            # （SIM_ENGINE_FAIL 只断电机推力，不触发坠毁检测，在 native SITL 无 STATUSTEXT）
-            params={"command": 208, "param1": 2, "_settle_s": 0.5},
-            pre_takeoff_m=10.0,
-        ),
-        verify=VerifySpec(
-            kind="wait_statustext",
-            # 必须匹配成功消息，不能用 "arachute"——后者会误匹配拒绝消息
-            # "Parachute: Landed"（地面/已着陆时拒绝部署），造成假绿
-            args={"keyword": "Parachute: Released"},
-            timeout=15.0,
-        ),
-        notes="MAV_CMD_DO_PARACHUTE RELEASE → STATUSTEXT 'Parachute: Released' (native SITL).",
-    ),
-
-    # ── Safety: payload abort lock（bool: deliveryAbortConditionActive）
-    ContentEntry(
-        semantic_tag="PAYLOAD_ABORT_LOCK",
-        guard_matcher=GuardMatcher(
-            operators=["bool"],
-            var_keywords=["payload", "abort", "delivery", "lock", "gripper"],
-        ),
-        ardu_params={
-            "GRIP_ENABLE": 1,
-            "GRIP_TYPE": 1,           # 1 = servo gripper
-            # SERVO7=Gripper → Gazebo channel 6（避开 gimbal 占用的 SERVO9-11/channel 8-10）
-            "SERVO7_FUNCTION": 28,    # 28 = Gripper
-            "GRIP_RELEASE": 2000,     # PWM 2000 → COMMAND 归一化 1.0 → TriggeredPublisher 触发
-            "GRIP_GRAB": 1000,        # PWM 1000 → 归一化 0.0（不触发）
-        },
-        tier="L2",
-        inject=InjectSpec(
-            kind="mavlink_command",
-            # MAV_CMD_DO_GRIPPER (211): param1=gripper_id(0), param2=action(1=RELEASE)
-            params={"command": 211, "param1": 0, "param2": 1, "_settle_s": 1.5},
-            pre_takeoff_m=5.0,
-        ),
-        verify=VerifySpec(
-            kind="wait_statustext",
-            args={"keyword": ["ripper", "grip"]},
-            timeout=10.0,
-        ),
-        notes="Payload abort → MAV_CMD_DO_GRIPPER → STATUSTEXT 'Gripper Released'.",
-    ),
-
-    # ── Constraint: max altitude（attr: maxAltitude）
-    ContentEntry(
-        semantic_tag="ALTITUDE_FENCE",
-        attr_matcher=AttrMatcher(
-            attr_keywords=["maxaltitude", "altitude", "maxalt", "alt"],
-            part_keywords=["flight", "controller", "autopilot"],
-        ),
-        ardu_params={"FENCE_ENABLE": 1, "FENCE_ALT_MAX": "@attr_match"},
-        tier="L1",
-        **_noop_l1(),
-        notes="maxAltitude attribute → FENCE_ALT_MAX.",
-    ),
-
-    # ── Performance: control loop rate（attr: controlFrequency）
-    ContentEntry(
-        semantic_tag="CONTROL_LOOP_RATE",
-        attr_matcher=AttrMatcher(
-            attr_keywords=["controlfreq", "looprate", "controlloop", "frequency",
-                           "freq", "rate"],
-            part_keywords=["flight", "controller", "autopilot"],
-        ),
-        ardu_params={"SCHED_LOOP_RATE": "@attr_match"},
-        tier="L1",
-        **_noop_l1(),
-        notes="controlFrequency attribute → SCHED_LOOP_RATE.",
-    ),
-
-    # ── Interface: MAVLink protocol（attr: encryptionKeyLength 或 part 名含 comm）
-    ContentEntry(
-        semantic_tag="MAVLINK_PROTOCOL",
-        attr_matcher=AttrMatcher(
-            attr_keywords=["encryption", "protocol", "mavlink", "keylength",
-                           "serial", "maxoperational"],
-            part_keywords=["communication", "comm", "link", "gcs"],
-        ),
-        ardu_params={"SERIAL0_PROTOCOL": 2},
-        tier="L1",
-        **_noop_l1(),
-        notes="CommunicationSystem → SERIAL0_PROTOCOL=2 (MAVLink v2).",
-    ),
-
-    # ── Performance: max airspeed（attr: maxAirspeed, unit m/s → cm/s ×100）
-    ContentEntry(
-        semantic_tag="MAX_SPEED",
-        attr_matcher=AttrMatcher(
-            attr_keywords=["maxairspeed", "airspeed", "maxspeed"],
-            multiplier=100.0,   # m/s → cm/s
-        ),
-        ardu_params={"WPNAV_SPEED": "@attr_match"},
-        tier="L1",
-        **_noop_l1(),
-        notes="maxAirspeed attribute (m/s) × 100 → WPNAV_SPEED (cm/s).",
-    ),
-
-    # ── Constraint: operational radius（attr: maxOperationalRadius, unit km → m ×1000）
-    ContentEntry(
-        semantic_tag="RADIUS_FENCE",
-        attr_matcher=AttrMatcher(
-            attr_keywords=["maxoperationalradius", "operationalradius",
-                           "maxradius", "radius"],
-            multiplier=1000.0,  # km → m
-        ),
-        ardu_params={"FENCE_RADIUS": "@attr_match"},
-        tier="L1",
-        **_noop_l1(),
-        notes="maxOperationalRadius (km) × 1000 → FENCE_RADIUS (m).",
-    ),
-
-    # ── Interface: RTCM GNSS corrections（attr: 含 gps/gnss 的 part）
-    ContentEntry(
-        semantic_tag="RTCM_GPS",
-        attr_matcher=AttrMatcher(
-            attr_keywords=["gnss", "gps", "correction", "rtcm", "differential"],
-            part_keywords=["perception", "navigation", "gnss", "gps", "sensor"],
-        ),
-        ardu_params={"GPS_INJECT_TO": 127},
-        tier="L1",
-        **_noop_l1(),
-        notes="RTCM/GNSS part → GPS_INJECT_TO=127 (broadcast corrections).",
-    ),
-]
-
-
-# ---------------------------------------------------------------------------
-# 按 semantic_tag 索引（供 Layer 2 AST 合成 / Layer 3 LLM 语义标签使用）
-# ---------------------------------------------------------------------------
-
-_TAG_TO_ENTRY: Dict[str, ContentEntry] = {
-    e.semantic_tag: e for e in _CONTENT_CATALOGUE
-}
-
-
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
-@dataclass
+@dataclass(frozen=True)
 class ResolvedParam:
     req_id: str
     part_name: str
     param_name: str
     value: Any
-    source: str = ""       # 描述值的来源，例如 "guard:<=:25.0" 或 "attr:maxAltitude"
+    source: str = ""
 
 
-@dataclass
+@dataclass(frozen=True)
 class SITLTestSpec:
     req_id: str
     tier: str
     inject: InjectSpec
     verify: VerifySpec
     notes: str
-    params: List[ResolvedParam] = field(default_factory=list)
+    params: tuple[ResolvedParam, ...] = ()
 
 
-# ---------------------------------------------------------------------------
-# RequirementLinker
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True, slots=True)
+class GuardEvidence:
+    part_name: str
+    attribute: str
+    kind: str
+    operator: str
+    threshold: Any
+    signature: tuple[Any, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptEventGuard:
+    """Pseudo-guard for an accept-event transition (no boolean guard).
+
+    Event-driven and guard-driven state machines are two SysML spellings of the
+    same behavioral semantics, so accepts are shaped like guards and the
+    exclusive-claim machinery handles both uniformly. ``attribute`` carries the
+    accepted event type name (e.g. ``AbortConditionActive``) so keyword matching
+    and claim keys work unchanged.
+    """
+    attribute: str
+    kind: str = "accept_event"
+    operator: str = "accept"
+    threshold: Any = None
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementEvidenceBundle:
+    """Immutable, revision-bound input for SITL and verification consumers."""
+
+    model_text: str
+    requirement_texts: Mapping[str, str]
+    satisfying_parts: Mapping[str, tuple[str, ...]]
+    guard_assignments: Mapping[str, GuardEvidence]
+    test_specs: tuple[SITLTestSpec, ...]
+    resolved_params: tuple[ResolvedParam, ...]
+    parm_file: str
+    traceability_mismatches: tuple[Mapping[str, str], ...]
+    coverage: Mapping[str, Any]
+
+    def coverage_payload(self) -> Dict[str, Any]:
+        """Return the legacy JSON shape without exposing mutable bundle state."""
+        return {
+            key: list(value) if isinstance(value, tuple) else value
+            for key, value in self.coverage.items()
+        }
+
 
 class RequirementLinker:
-    """
-    通过 AST（satisfy_relationships + state_extractor guard）将 SysML
-    需求映射到 ArduPilot 参数，不依赖属性名字符串。
-
-    可选传入 llm 启用语义标签分类，使得不在 _REQ_CATALOGUE key 里的 req ID
-    也能通过状态机语义找到匹配的模板（三层 fallback：req ID → 语义标签 →
-    unmapped）。
-    """
+    """通过 AST（satisfy_relationships + state_extractor guard）将 SysML 需求映射到 ArduPilot 参数，不依赖属性名字符串。"""
 
     def __init__(
         self,
         model: SysMLLiteModel,
         llm: Optional[Any] = None,
         verbose: bool = False,
+        plan_payload: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._model = model
         self._llm = llm
         self._verbose = verbose
-        # req_id → part_name
+        # Requirement -> model-identity bindings from the frozen plan. The
+        # sent-command traceability check reads the route: a response sending
+        # through the requirement's own causal-path command leg matches whatever
+        # the payload item is spelled like (run3's RecoveryCmdData through
+        # recoveryCmd - the plan's SAFE_005 route - was rejected by the
+        # CHUTE-substring check).
+        from src.simulation.verification_binding import plan_bindings
+        if plan_payload is None:
+            metadata = getattr(model, "metadata", None) or {}
+            candidate = metadata.get("whole_model_generation_plan")
+            plan_payload = candidate if isinstance(candidate, dict) else None
+        self._requirement_bindings = plan_bindings(plan_payload)
+        self._contracts: Dict[str, Any] = {}
+        self._contract_trace_findings: Dict[str, List[Any]] = {}
         self._satisfy_map: Dict[str, List[str]] = self._build_satisfy_map()
-        # part_name → List[GuardCondition]
         self._guard_map: Dict[str, List[Any]] = self._build_guard_map()
-        # part_name → {attr_name: float}
         self._attr_map: Dict[str, Dict[str, float]] = self._build_attr_map()
-        # semantic_tag → ContentEntry（供 Layer 2/3 反查）
+        self._port_map: Dict[str, List[str]] = self._build_port_map()
         self._tag_to_entry: Dict[str, ContentEntry] = _TAG_TO_ENTRY
-        # part_name → List[SynthesizedSpec]（AST 合成，主层）
         self._ast_specs = self._build_ast_specs()
-        # req_id → tag（LLM 状态机语义分类，第三层 fallback）
         self._semantic_map: Dict[str, str] = self._build_semantic_map()
-        # req_id → {param, value, tier}（LLM 需求文本直接推断，第四层 fallback）
         self._direct_param_map: Dict[str, Dict] = self._build_direct_param_map()
-        # req_id → (part_name, guard, ContentEntry)：独占 guard 分配
+        # req_id -> requirement doc text, used as a traceability cross-check against
+        # the guard/action-derived semantic tag. The guard stays the primary anchor;
+        # a text/tag family mismatch means the model satisfies the requirement with
+        # the wrong behavior.
+        self._req_texts: Dict[str, str] = self._extract_requirement_texts()
+        self._traceability_mismatches: Dict[str, Dict[str, str]] = {}
+        # req_id -> (part_name, guard, ContentEntry)：独占 guard 分配
         # 同一 guard 只能分配给一个 req，防止多 REQ 共享 part 时全部映射到同一 guard
         self._guard_assignment: Dict[str, Any] = self._assign_guards_exclusive()
         # _lookup_catalogue 结果缓存：避免 _resolve_all 多次调用时重复打印 [CONTENT]
         self._catalogue_cache: Dict[str, Optional[Dict]] = {}
+        self._resolved_cache: Optional[tuple[ResolvedParam, ...]] = None
+        self._evidence_bundle: Optional[RequirementEvidenceBundle] = None
 
     def _assign_guards_exclusive(self) -> Dict[str, Any]:
-        """
-        预分配：将 part 的每个 guard 独占地分配给一个 req。
+        """预分配：把 part 的每个 guard 独占分配给一个 req。
 
-        问题根因：多个 REQ 共享同一 part（如 SafetyMonitor satisfy 5 个 SAFE REQ）时，
-        若不加独占控制，对每个 REQ 调用 _match_by_content 都会返回相同的第一个匹配 guard，
-        导致 BATT_FS_LOW_PCT=25 被写多次而 BATT_FS_CRT_PCT=15 从未被写。
-
-        算法：
-          按 req_id 排序（确定性），对每个 req 贪心地分配第一个未被占用的 guard。
-          返回 {req_id: {"part": str, "guard": GuardCondition, "entry": ContentEntry}}
-          或    {req_id: None}（无 guard 可分配）
+        多个 REQ 共享同一 part（如 SafetyMonitor satisfy 5 个 SAFE REQ）时，
+        _match_by_content 对每个 REQ 都返回同一个首个匹配 guard，于是
+        BATT_FS_LOW_PCT=25 被写多次而 BATT_FS_CRT_PCT=15 从未被写。按 req_id 排序
+        （确定性）后贪心分配第一个未占用的 guard，返回
+        {req_id: {"part": str, "guard": GuardCondition, "entry": ContentEntry}}
+        或 {req_id: None}。
         """
         assignment: Dict[str, Any] = {}
-        claimed: set = set()  # (part_name, guard_attr, guard_op)
+        claimed: set = set()
 
         for req_id in sorted(self._covered_req_ids()):
             part_names = self._satisfy_map.get(req_id, [])
-            found = False
-            for entry in _CONTENT_CATALOGUE:
-                if entry.guard_matcher is None:
-                    continue
-                gm = entry.guard_matcher
-                for pname in part_names:
-                    for guard in self._guard_map.get(pname, []):
-                        if not self._guard_satisfies(guard, gm, pname):
-                            continue
-                        gkey = (pname,
-                                getattr(guard, "attribute", ""),
-                                getattr(guard, "operator", ""))
-                        if gkey in claimed:
-                            continue
-                        # 成功分配
-                        claimed.add(gkey)
-                        assignment[req_id] = {
-                            "part":  pname,
-                            "guard": guard,
-                            "entry": entry,
-                        }
-                        found = True
-                        break
-                    if found:
-                        break
-                if found:
-                    break
+            expected_family = self._requirement_family(req_id)
+            # Doc text present but no safety-family signal (IP54, regulatory,
+            # environmental...): the requirement does not claim a safety guard merely
+            # for satisfying the same part (guard-side analog of the attr req_text_kws
+            # gate). Docless requirements keep legacy matching.
+            if expected_family is None and self._req_texts.get(req_id, "").strip():
+                continue
+            entries = self._family_guard_entries(
+                expected_family, self._preferred_semantic_tags(req_id)
+            )
+
+            if self._claim_guard(req_id, entries, part_names, claimed, assignment):
+                continue
+            # Same-family requirements can point to the same physical fault guard
+            # (e.g. self-test inhibit + alert), so let them share it rather than fall
+            # through to an unrelated AST/LLM tag that traceability then blocks.
+            if expected_family is not None and self._claim_guard(
+                req_id, entries, part_names, claimed, assignment,
+                allow_claimed=True,
+            ):
+                continue
+            # Cross-family fallback: docless requirements, and family-known
+            # requirements with no same-family guard, where the wrong-family
+            # match surfaces as a TRACE block per A4 instead of vanishing.
+            all_guard_entries = [
+                entry for entry in _CONTENT_CATALOGUE
+                if entry.guard_matcher is not None
+            ]
+            self._claim_guard(
+                req_id, all_guard_entries, part_names, claimed, assignment
+            )
 
         return assignment
 
-    def _build_ast_specs(self):
-        """
-        用 AST 合成器从 guard 变量名 + entry action 名直接推导
-        InjectSpec/VerifySpec，建立 part_name → List[SynthesizedSpec] 索引。
+    def _family_guard_entries(
+        self,
+        expected_family: Optional[str],
+        preferred_tags: List[str],
+    ) -> List[ContentEntry]:
+        entries = [
+            entry for entry in _CONTENT_CATALOGUE
+            if entry.guard_matcher is not None
+            and (
+                expected_family is None
+                or self._tag_family(entry.semantic_tag) == expected_family
+            )
+        ]
+        if preferred_tags:
+            entries.sort(key=lambda e: (
+                preferred_tags.index(e.semantic_tag)
+                if e.semantic_tag in preferred_tags else len(preferred_tags)
+            ))
+        return entries
 
-        不依赖 LLM，<1ms，Phase 2 标准命名后接近 100% 覆盖。
+    def _claim_guard(
+        self,
+        req_id: str,
+        entries: List[ContentEntry],
+        part_names: List[str],
+        claimed: set,
+        assignment: Dict[str, Any],
+        allow_claimed: bool = False,
+    ) -> bool:
+        """Greedily claim the first matching (part, guard) for *req_id* from
+        *entries*, recording it in *assignment* and marking the guard claimed.
+
+        A guard already claimed by another requirement is skipped unless
+        ``allow_claimed``, which the caller enables only for same-family sharing;
+        returns True when an assignment was made. Entries may carry
+        ``req_text_kws`` / ``req_text_exclude_kws`` gates, so a same-family
+        requirement about the opposite response (e.g. "release the payload") does
+        not claim a lock-semantics guard through a shared part.
         """
+        req_text = self._requirement_match_text(req_id)
+        req_blob = f"{req_id} {req_text}".lower()
+        for entry in entries:
+            if entry.req_text_kws and req_text and not any(
+                kw in req_blob for kw in entry.req_text_kws
+            ):
+                continue
+            if entry.req_text_exclude_kws and any(
+                kw in req_blob for kw in entry.req_text_exclude_kws
+            ):
+                continue
+            gm = entry.guard_matcher
+            for pname in part_names:
+                for guard in self._guard_map.get(pname, []):
+                    if not self._guard_satisfies(
+                        guard, gm, pname, entry.semantic_tag
+                    ):
+                        continue
+                    gkey = (pname,
+                            getattr(guard, "attribute", ""),
+                            getattr(guard, "operator", ""))
+                    if gkey in claimed and not allow_claimed:
+                        continue
+                    if gkey not in claimed:
+                        claimed.add(gkey)
+                    assignment[req_id] = {
+                        "part":  pname,
+                        "guard": guard,
+                        "entry": entry,
+                    }
+                    return True
+        return False
+
+    def _binding_identity_tags(self) -> Dict[str, str]:
+        """{plan-declared identifier (lower) -> semantic tag} for the AST
+        synthesizer's identity tier of guard matching.
+
+        The tag comes from the owning requirement's own text/contract-derived
+        preference, so it survives renames; an identifier claimed by two different
+        tags is refused rather than guessed.
+        """
+        if not self._requirement_bindings:
+            return {}
+        if not hasattr(self, "_req_texts"):
+            # _build_ast_specs runs before the text map in __init__.
+            self._req_texts = self._extract_requirement_texts()
+        from src.simulation.verification_binding import identity_tokens
+        from src.sitl.ast_synthesizer import AST_GUARD_TAGS
+        out: Dict[str, str] = {}
+        ambiguous: set = set()
+        for req_id, binding in sorted(self._requirement_bindings.items()):
+            try:
+                preferred = self._preferred_semantic_tags(req_id)
+                tag = next(
+                    (t for t in preferred if t in AST_GUARD_TAGS), None
+                )
+                if tag is None:
+                    # Families without a preference table (PAYLOAD,
+                    # PARACHUTE) map by family, but the ambiguity domain is
+                    # the whole catalogue gated by each entry's own req_text
+                    # gates, and only a lone survivor assigns the tag. A
+                    # narrower domain ("unique within the AST tag set")
+                    # missed the power-on entry: SAFE_008's PowerOn identity
+                    # got tagged PAYLOAD_ABORT_LOCK and its power-on default
+                    # test was displaced by the release-then-grab flight
+                    # test. SAFE_008's text passes both the abort-lock and
+                    # power-on gates -> ambiguous -> keyword fallback;
+                    # SAFE_006 passes only the abort gate -> unique.
+                    family = self._requirement_family(req_id)
+                    req_text = self._requirement_match_text(req_id)
+                    req_blob = f"{req_id} {req_text}".lower()
+
+                    def _gates_pass(entry) -> bool:
+                        if entry.req_text_kws and req_text and not any(
+                            kw in req_blob for kw in entry.req_text_kws
+                        ):
+                            return False
+                        if entry.req_text_exclude_kws and any(
+                            kw in req_blob
+                            for kw in entry.req_text_exclude_kws
+                        ):
+                            return False
+                        return True
+
+                    family_tags = sorted({
+                        entry.semantic_tag
+                        for entry in self._tag_to_entry.values()
+                        if family
+                        and self._tag_family(entry.semantic_tag) == family
+                        and _gates_pass(entry)
+                    })
+                    if len(family_tags) == 1:
+                        tag = family_tags[0]
+            except Exception as exc:
+                from src.utils.suppressed import record_suppressed
+                record_suppressed("sitl.linker.identity_tags", exc)
+                continue
+            if tag is None:
+                continue
+            for token in identity_tokens(binding):
+                if token in out and out[token] != tag:
+                    ambiguous.add(token)
+                    continue
+                out[token] = tag
+        for token in ambiguous:
+            out.pop(token, None)
+        return out
+
+    def _build_ast_specs(self):
         try:
             from src.sitl.ast_synthesizer import synthesize_specs
-            return synthesize_specs(self._model, verbose=self._verbose)
+            self._identity_tag_map = self._binding_identity_tags()
+            return synthesize_specs(
+                self._model,
+                verbose=self._verbose,
+                identity_tags=self._identity_tag_map,
+            )
         except Exception as e:
             if self._verbose:
                 print(f"  [AST-SYN] failed: {e}")
             return {}
 
     def _build_semantic_map(self) -> Dict[str, str]:
-        """
-        用 LLM 给状态机打语义标签，建立 req_id → tag 映射。
+        """用 LLM 给状态机打语义标签，建立 req_id -> tag 映射。
 
-        核心逻辑：一个 part 可能有多个状态机（多个安全行为），不能简单地
-        用 part_name → tag（后写的会覆盖前面）。正确做法是把每个 req 的
-        guard 变量与该 part 的状态机 guard 做交叉匹配，选最接近的 tag。
+        一个 part 可能有多个状态机（多个安全行为），part_name -> tag 会被后写的
+        覆盖；改为把每个 req 的 guard 变量与该 part 的状态机 guard 交叉匹配，
+        取最接近的 tag。
         """
         if self._llm is None:
             return {}
@@ -517,15 +395,15 @@ class RequirementLinker:
                 print(f"  [SEMANTIC] classify failed: {e}")
             return {}
 
-        # 建立 state_def_name → (tag, owner_part, guard_vars) 的详细表
         try:
             from src.simulation.state_extractor import extract_state_machines
             text = self._model.to_sysml_text() or ""
             sms = extract_state_machines(text)
-        except Exception:
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.semantic_state_extract", exc)
             sms = []
 
-        # sm_name → (owner_part, guard 涉及的所有属性名)
         sm_detail: Dict[str, Tuple[str, List[str]]] = {}
         for sm in sms:
             guard_attrs: List[str] = []
@@ -536,13 +414,10 @@ class RequirementLinker:
                         guard_attrs.append(attr.lower())
             sm_detail[sm.name] = (sm.owner_part, guard_attrs)
 
-        # 为每个 req 找最匹配的 tag
-        # 策略：req 满足的所有 part 中，找 guard 变量与该 req 最接近的 sm
         req_tag: Dict[str, str] = {}
         for req_id in self._satisfy_map:
-            part_names = self._satisfy_map[req_id]  # 现在是 list
+            part_names = self._satisfy_map[req_id]
 
-            # 收集所有满足该 REQ 的 part 下的候选 sm
             candidate_sms = [
                 (sm_name, sm_to_tag[sm_name], detail)
                 for sm_name, detail in sm_detail.items()
@@ -551,44 +426,31 @@ class RequirementLinker:
             if not candidate_sms:
                 continue
 
-            # 如果只有一个 sm，直接用
             if len(candidate_sms) == 1:
                 req_tag[req_id] = candidate_sms[0][1]
                 continue
 
-            # 多个 sm：用 req_id 关键词与 sm guard 属性做最佳匹配
-            # 把 req_id 拆成小写词（REQ_FUNC_007 → ["func","007"]）
             req_tokens = set(req_id.lower().replace("_", " ").split())
 
-            best_sm, best_tag, best_score = None, None, -1
+            best_tag, best_score = None, -1
             for sm_name, tag, (owner, guard_attrs) in candidate_sms:
-                # 先用 tag 关键词打分
                 tag_tokens = set(tag.lower().replace("_", " ").split())
                 score = len(req_tokens & tag_tokens & set(
                     ["battery","batt","gcs","comm","link","sensor","parachute",
                      "propulsion","engine","payload","abort"]
                 ))
-                # 如果 guard 属性明确出现在 req_id 里，加分
                 for attr in guard_attrs:
                     if any(tok in attr for tok in req_tokens):
                         score += 2
                 if score > best_score:
-                    best_score, best_sm, best_tag = score, sm_name, tag
+                    best_score, best_tag = score, tag
 
-            # 只有打到分才采用，否则不误判
             if best_tag and best_score > 0:
                 req_tag[req_id] = best_tag
 
         return req_tag
 
     def _build_direct_param_map(self) -> Dict[str, Dict]:
-        """
-        Layer 3b（第四层 fallback）：用 LLM 从需求文本直接推断 ArduPilot 参数。
-
-        只处理层1-3均未命中的需求（FUNC/PERF/CONS/INTF 类）。
-        输入：需求文本（从 SysML doc 注释提取）。
-        输出：{req_id: {param: str, value: float, tier: str}}。
-        """
         if self._llm is None:
             return {}
         try:
@@ -599,20 +461,16 @@ class RequirementLinker:
         except ImportError:
             return {}
 
-        # 找出层1-3均未命中的 req（有 satisfy 关系但无 catalogue/AST/LLM 匹配）
         unmapped_reqs: Dict[str, str] = {}
         all_req_texts = extract_req_texts_from_model(self._model)
 
         for req_id in self._covered_req_ids():
-            # 层2：AST 合成命中
             parts = self._satisfy_map.get(req_id, [])
             ast_hit = any(self._ast_specs.get(p) for p in parts)
             if ast_hit:
                 continue
-            # 层3：LLM 语义标签命中
             if req_id in self._semantic_map:
                 continue
-            # 三层全未命中 → 送给 Layer 3b
             text = all_req_texts.get(req_id, "")
             if text:
                 unmapped_reqs[req_id] = text
@@ -625,24 +483,14 @@ class RequirementLinker:
         )
         return result
 
-    # ------------------------------------------------------------------
-    # 内容匹配核心方法（Layer 1 — 完全不依赖 REQ ID）
-    # ------------------------------------------------------------------
-
     def _entry_to_dict(self, entry: ContentEntry,
                        guard_val: Optional[float] = None,
                        guard_src: str = "",
                        attr_val: Optional[float] = None,
                        attr_src: str = "") -> Dict[str, Any]:
-        """
-        将 ContentEntry 转换为 _resolve_all 期望的 dict 格式。
-
-        guard_val / attr_val：匹配时已解析的数值，存入 _resolved_* 键，
-        供 _resolve_all 跳过 threshold_slot 机制直接使用。
-        """
-        return {
+        result = {
             "semantic_tag":        entry.semantic_tag,
-            "threshold_slot":      None,          # 内容匹配不再需要
+            "threshold_slot":      None,
             "ardu_params":         entry.ardu_params,
             "_resolved_guard_val": guard_val,
             "_resolved_guard_src": guard_src,
@@ -657,20 +505,39 @@ class RequirementLinker:
                 "notes":   entry.notes,
             },
         }
+        if entry.l2_inject is not None and entry.l2_verify is not None:
+            result["l2_test"] = {
+                "tier":   "L2",
+                "inject": entry.l2_inject,
+                "verify": entry.l2_verify,
+                "notes":  entry.l2_notes,
+            }
+        return result
 
     def _guard_satisfies(self, guard, gm: GuardMatcher,
-                          part_name: str) -> bool:
-        """判断一条 guard 是否匹配 GuardMatcher。"""
+                          part_name: str,
+                          entry_tag: str = "") -> bool:
+        """判断一条 guard（或 accept 伪 guard）是否匹配 GuardMatcher。
+
+        身份命中要求 tag 一致：变量的计划身份 tag == 本词条的 semantic_tag。按
+        "变量属于本需求"放宽被实测击穿两次（SAFE_008 的 PowerOn 身份让它认领
+        abort 释放-抓取词条，顶掉自己的上电默认检查），身份池回答"这是谁的
+        元素"，不回答"它满足哪个词条"。无 tag 的变量不放宽，走关键词兜底。
+        """
         kind = getattr(guard, "kind", "")
         var  = getattr(guard, "attribute", "").lower()
+        tag_map = getattr(self, "_identity_tag_map", {})
 
-        if "bool" in gm.operators:
-            # bool_true guard
-            if kind != "bool_true":
+        def _var_matches() -> bool:
+            if entry_tag and tag_map.get(var) == entry_tag:
+                return True
+            return any(kw in var for kw in gm.var_keywords)
+
+        if kind == "accept_event":
+            if "event" not in gm.operators:
                 return False
-            if not any(kw in var for kw in gm.var_keywords):
+            if not _var_matches():
                 return False
-            # 可选：检查 entry action 关键词
             if gm.action_kws:
                 action = self._find_guard_action(part_name, guard)
                 if not action or not any(
@@ -679,13 +546,25 @@ class RequirementLinker:
                     return False
             return True
 
-        # comparison guard
+        if "bool" in gm.operators and kind == "bool_true":
+            if not _var_matches():
+                return False
+            if gm.action_kws:
+                action = self._find_guard_action(part_name, guard)
+                if not action or not any(
+                    kw in action.lower() for kw in gm.action_kws
+                ):
+                    return False
+            return True
+        if "bool" in gm.operators and "event" not in gm.operators:
+            return False
+
         if kind != "comparison":
             return False
         op = getattr(guard, "operator", "")
         if op not in gm.operators:
             return False
-        if not any(kw in var for kw in gm.var_keywords):
+        if not _var_matches():
             return False
         th = getattr(guard, "threshold", 0.0)
         if not (gm.threshold_min <= th <= gm.threshold_max):
@@ -693,15 +572,23 @@ class RequirementLinker:
         return True
 
     def _find_guard_action(self, part_name: str, guard) -> Optional[str]:
-        """
-        在 part 的状态机里找到包含该 guard 的转移，返回其 target state 的
-        entry action 名。用于 GuardMatcher.action_kws 区分语义。
-        """
         try:
             from src.simulation.state_extractor import extract_state_machines
             text = self._model.to_sysml_text() or ""
+            wanted_event = (
+                getattr(guard, "attribute", "")
+                if getattr(guard, "kind", "") == "accept_event" else None
+            )
             for sm in extract_state_machines(text):
                 if sm.owner_part != part_name:
+                    continue
+                if wanted_event is not None:
+                    for tr in sm.transitions:
+                        if tr.is_initial or tr.accept_trigger != wanted_event:
+                            continue
+                        action = sm.entry_action_for_state(tr.target or "")
+                        if action:
+                            return action
                     continue
                 for tr in sm.fault_transitions():
                     for g in tr.guards:
@@ -709,25 +596,172 @@ class RequirementLinker:
                                 getattr(guard, "attribute", "") and
                                 getattr(g, "operator", "") ==
                                 getattr(guard, "operator", "")):
-                            return sm.entry_action_for_state(tr.target or "")
-        except Exception:
+                            action = sm.entry_action_for_state(tr.target or "")
+                            if action:
+                                return action
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.entry_action_lookup", exc)
             pass
         return None
 
-    def _match_by_content(self, req_id: str) -> Optional[Dict[str, Any]]:
+    def _guard_response_commands(self, part_name: str, guard) -> tuple[str, set[str]]:
+        try:
+            from src.simulation.state_extractor import extract_state_machines
+            text = self._model.to_sysml_text() or ""
+            fallback_action = ""
+            wanted_event = (
+                getattr(guard, "attribute", "")
+                if getattr(guard, "kind", "") == "accept_event" else None
+            )
+            for sm in extract_state_machines(text):
+                if sm.owner_part != part_name:
+                    continue
+                if wanted_event is not None:
+                    matched = [
+                        tr for tr in sm.transitions
+                        if not tr.is_initial and tr.accept_trigger == wanted_event
+                    ]
+                else:
+                    matched = [
+                        tr for tr in sm.fault_transitions()
+                        if any(
+                            getattr(g, "attribute", "") == getattr(guard, "attribute", "")
+                            and getattr(g, "operator", "") == getattr(guard, "operator", "")
+                            for g in tr.guards
+                        )
+                    ]
+                for tr in matched:
+                    state = next((s for s in sm.states if s.name == (tr.target or "")), None)
+                    if state is None:
+                        continue
+                    fallback_action = fallback_action or (state.entry_action or "")
+                    commands = {str(cmd).upper() for cmd, _port in state.sends}
+                    if commands:
+                        return state.entry_action or "", commands
+            return fallback_action, set()
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.guard_response", exc)
+            return "", set()
+
+    def _guard_response_send_ports(self, part_name: str, guard) -> set[str]:
+        try:
+            from src.simulation.state_extractor import extract_state_machines
+            text = self._model.to_sysml_text() or ""
+            wanted_event = (
+                getattr(guard, "attribute", "")
+                if getattr(guard, "kind", "") == "accept_event" else None
+            )
+            ports: set[str] = set()
+            for sm in extract_state_machines(text):
+                if sm.owner_part != part_name:
+                    continue
+                if wanted_event is not None:
+                    matched = [
+                        tr for tr in sm.transitions
+                        if not tr.is_initial and tr.accept_trigger == wanted_event
+                    ]
+                else:
+                    matched = [
+                        tr for tr in sm.fault_transitions()
+                        if any(
+                            getattr(g, "attribute", "") == getattr(guard, "attribute", "")
+                            and getattr(g, "operator", "") == getattr(guard, "operator", "")
+                            for g in tr.guards
+                        )
+                    ]
+                for tr in matched:
+                    state = next((s for s in sm.states if s.name == (tr.target or "")), None)
+                    if state is None:
+                        continue
+                    ports.update(
+                        str(port) for _cmd, port in state.sends if port
+                    )
+            return ports
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.guard_send_ports", exc)
+            return set()
+
+    def _terminal_route_ports(self, req_id: str) -> set[str]:
+        """Ports of the final hop of the requirement's causal path, per its plan.
+
+        The terminal effect leg - for the parachute requirement,
+        SafetyMonitor.recoveryCmd -> RecoverySystem.recoveryCmd. A response sending
+        through it is on the requirement's own route.
         """
-        Layer 1（内容驱动）：按 guard/attr 内容匹配，与 REQ ID 完全无关。
+        from src.simulation.verification_binding import binding_for
+        binding = binding_for(self._requirement_bindings, req_id)
+        if binding is None or not binding.route:
+            return set()
+        last = binding.route[-1]
+        return {port for port in (last[1], last[3]) if port}
 
-        guard 匹配优先使用 _guard_assignment 预分配结果（独占，防止多 REQ
-        抢占同一 guard）。attr 匹配仍在运行时动态进行（属性不存在争用问题）。
+    def _action_traceability_issue(
+        self, req_id: str, tag: str
+    ) -> Optional[Dict[str, str]]:
+        expected_commands = {
+            "BATTERY_RTB": {"CMD_RTL"},
+            "BATTERY_LAND": {"CMD_LAND"},
+            "GCS_LOSS": {"CMD_LAND", "CMD_RTL"},
+            "GCS_LOSS_LAND": {"CMD_LAND"},
+            "GCS_LOSS_RTL": {"CMD_RTL"},
+            "PARACHUTE_DEPLOY": {"CMD_PARACHUTE"},
+        }
+        expected = expected_commands.get(tag)
+        assigned = self._guard_assignment.get(req_id)
+        if not expected or not assigned:
+            return None
+        action, commands = self._guard_response_commands(
+            assigned["part"], assigned["guard"]
+        )
+        # Empty action bodies stay abstract behavior allocations; an explicit
+        # command is checked against the expected one.
+        semantic_match = bool(commands & expected)
+        if tag == "PARACHUTE_DEPLOY":
+            # Accept-side widening only: a CHUTE-spelled command can accept, not reject.
+            semantic_match = semantic_match or any(
+                "PARACHUTE" in command or "CHUTE" in command
+                for command in commands
+            )
+        if not semantic_match:
+            # Route identity from the plan: a response sending through the
+            # requirement's own terminal causal-path leg is the commanded response,
+            # whatever the payload item is named. run3's RecoveryCmdData through
+            # recoveryCmd (the SAFE_005 route) was rejected by the substring check,
+            # collapsing L2 generation from ~9 tests to 3.
+            route_ports = self._terminal_route_ports(req_id)
+            if route_ports:
+                send_ports = self._guard_response_send_ports(
+                    assigned["part"], assigned["guard"]
+                )
+                semantic_match = bool(send_ports & route_ports)
+        if not commands or semantic_match:
+            return None
+        return {
+            "req_id": req_id,
+            "expected_family": tag,
+            "matched_family": ",".join(sorted(commands)),
+            "matched_tag": tag,
+            "requirement_text": self._req_texts.get(req_id, ""),
+            "message": (
+                f"traceability mismatch: {tag} expects one of "
+                f"{sorted(expected)}, but action {action} sends {sorted(commands)}"
+            ),
+        }
 
-        返回 _entry_to_dict(entry, ...) 格式的 dict，或 None。
+    def _match_by_content(self, req_id: str) -> Optional[Dict[str, Any]]:
+        """Layer 1（内容驱动）：按 guard/attr 内容匹配，与 REQ ID 无关。
+
+        guard 匹配用 _guard_assignment 的预分配结果（独占，防止多 REQ 抢同一
+        guard）；attr 匹配仍在运行时动态进行（属性不存在争用）。返回
+        _entry_to_dict(entry, ...) 格式的 dict，或 None。
         """
         part_names = self._satisfy_map.get(req_id)
         if not part_names:
             return None
 
-        # ── Guard 匹配：使用独占预分配结果 ────────────────────────────
         assigned = getattr(self, "_guard_assignment", {}).get(req_id)
         if assigned is not None:
             pname = assigned["part"]
@@ -744,8 +778,22 @@ class RequirementLinker:
             return self._entry_to_dict(entry, guard_val=g_val, guard_src=g_src)
 
         # ── Attr 匹配：动态搜索（属性不存在争用）─────────────────────
+        # req_text_kws gate：attr 命中只说明 satisfy 的 part 上有这个属性，不说明
+        # 这条需求关于这个量。有需求文本时要求文本命中条目关键词，否则 MTOW/温度/
+        # 法规类需求会被首个 attr 命中的条目错标为 L1 PASS（曾发生：FENCE_ALT_MAX
+        # "验证" 姿态 RMS、WPNAV_SPEED "验证" MTOW）。
+        req_text = self._requirement_match_text(req_id)
+        req_blob = f"{req_id} {req_text}".lower()
         for entry in _CONTENT_CATALOGUE:
             if entry.attr_matcher is None:
+                continue
+            if entry.req_text_kws and req_text and not any(
+                kw in req_blob for kw in entry.req_text_kws
+            ):
+                continue
+            if entry.req_text_exclude_kws and any(
+                kw in req_blob for kw in entry.req_text_exclude_kws
+            ):
                 continue
             am = entry.attr_matcher
             for pname in part_names:
@@ -754,8 +802,12 @@ class RequirementLinker:
                 ):
                     continue
                 attrs = self._attr_map.get(pname, {})
+                tag_map = getattr(self, "_identity_tag_map", {})
                 for aname, aval in attrs.items():
-                    if not any(kw in aname.lower() for kw in am.attr_keywords):
+                    if tag_map.get(aname.lower()) != entry.semantic_tag \
+                            and not any(
+                        kw in aname.lower() for kw in am.attr_keywords
+                    ):
                         continue
                     resolved = (round(aval * am.multiplier)
                                 if am.multiplier != 1.0 else aval)
@@ -770,21 +822,46 @@ class RequirementLinker:
                     return self._entry_to_dict(
                         entry, attr_val=resolved, attr_src=src
                     )
+                # ── Port 匹配（attr 未命中时）：接口类 part 可以只声明 port。
+                # port 没有数值，动态 token（@guard/@attr_match/@attr:）无从解析，
+                # 所以静态 ardu_params 是硬前提；条目误开 allow_port_match 也不
+                # 放行，落入 no-mapping。
+                if am.allow_port_match and not self._has_dynamic_params(entry):
+                    for port_name in self._port_map.get(pname, []):
+                        if tag_map.get(port_name.lower()) != entry.semantic_tag \
+                                and not any(
+                            kw in port_name.lower() for kw in am.attr_keywords
+                        ):
+                            continue
+                        if self._verbose:
+                            print(f"  [CONTENT] {req_id} → {entry.semantic_tag} "
+                                  f"port={pname}.{port_name} (static params)")
+                        return self._entry_to_dict(
+                            entry, attr_val=None,
+                            attr_src=f"port:{pname}.{port_name}",
+                        )
 
         return None
 
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _has_dynamic_params(entry: ContentEntry) -> bool:
+        return any(
+            isinstance(value, str) and value.startswith("@")
+            for value in entry.ardu_params.values()
+        )
+
+    def _requirement_match_text(self, req_id: str) -> str:
+        """Requirement prose used for semantic matching, without method tags.
+
+        Verification annotations such as ``[V: hardware-in-the-loop]`` describe how
+        evidence is collected; leaving their words in the matcher hit a waypoint CEP
+        requirement against CONTROL_LOOP_RATE on the word ``loop``.
+        """
+        text = self._req_texts.get(req_id, "")
+        return re.sub(r"\[(?:V|SEV)\s*:[^\]]*\]", " ", text,
+                      flags=re.IGNORECASE).strip()
 
     def _lookup_catalogue(self, req_id: str) -> Optional[Dict[str, Any]]:
-        """
-        五层 Fallback（内容优先，REQ ID 无关）：
-
-          层1  _CONTENT_CATALOGUE 内容匹配（guard/attr）← 新，最健壮
-          层2  AST 合成器（guard 变量名关键词）
-          层3  LLM 状态机语义分类
-          层3b LLM 需求文本直接推断
-          层4  全部失败 → None
-        """
         if req_id in self._catalogue_cache:
             return self._catalogue_cache[req_id]
 
@@ -795,87 +872,461 @@ class RequirementLinker:
 
         result: Optional[Dict[str, Any]] = None
 
-        # ── 层1：内容匹配（_CONTENT_CATALOGUE）────────────────────────
         result = self._match_by_content(req_id)
 
-        # ── 层2：AST 合成（遍历所有 satisfying parts）──────────────────
-        if result is None:
-            for pname in part_names:
-                ast_candidates = self._ast_specs.get(pname, [])
-                if not ast_candidates:
-                    continue
-                best = self._best_ast_spec(req_id, pname, ast_candidates)
-                if best is not None:
-                    base_entry = self._tag_to_entry.get(best.tag)
-                    if base_entry:
-                        # Resolve the threshold from the guard the AST synthesizer
-                        # matched (best.guard_var), so a `@guard` placeholder is
-                        # filled here rather than leaking as <unresolved:guard>
-                        # even though the model contains the guard.
-                        g_val, g_src = self._threshold_for_guard_var(
-                            pname, best.guard_var,
-                            base_entry.guard_matcher.operators
-                            if base_entry.guard_matcher else None,
-                        )
-                        if self._verbose:
-                            print(f"  [AST-SYN] {req_id} → tag={best.tag} "
-                                  f"guard={best.guard_var!r} (part={pname})"
-                                  + (f" thr={g_val}" if g_val is not None else ""))
-                        d = self._entry_to_dict(
-                            base_entry, guard_val=g_val, guard_src=g_src
-                        )
-                        d["sitl_test"] = {
-                            "tier":   base_entry.tier,
-                            "inject": best.inject,
-                            "verify": best.verify,
-                            "notes":  base_entry.notes,
-                        }
-                        result = d
-                        break
+        # Part-level fallbacks (AST synthesis / LLM state-machine tags) map the
+        # part's safety behavior. With doc text present but no safety-family signal,
+        # that behavior is not attributed to this requirement - same rule as the
+        # guard/attr text gates (IP54 does not inherit SafetyMonitor's GCS spec
+        # through a shared part).
+        _text_without_family = (
+            bool(self._req_texts.get(req_id, "").strip())
+            and self._requirement_family(req_id) is None
+        )
 
-        # ── 层3：LLM 状态机语义标签 ────────────────────────────────────
-        if result is None:
+        if result is None and not _text_without_family:
+            result = self._lookup_from_ast(req_id, part_names)
+
+        if result is None and not _text_without_family:
             tag = self._semantic_map.get(req_id)
             if tag and tag in self._tag_to_entry:
                 if self._verbose:
                     print(f"  [SEMANTIC] {req_id} → tag={tag} (parts={part_names})")
                 result = self._entry_to_dict(self._tag_to_entry[tag])
 
-        # ── 层3b：LLM 需求文本直接推断 ─────────────────────────────────
         if result is None:
-            direct = self._direct_param_map.get(req_id)
-            if direct:
-                param_name = direct["param"]
-                value      = direct["value"]
-                tier       = direct.get("tier", "L1")
-                if self._verbose:
-                    print(f"  [REQ-PARAM] {req_id} → {param_name}={value} [{tier}]")
-                result = {
-                    "semantic_tag":        f"LLM_DIRECT:{param_name}",
-                    "threshold_slot":      None,
-                    "ardu_params":         {param_name: value},
-                    "_resolved_guard_val": None,
-                    "_resolved_attr_val":  None,
-                    "sitl_test": {
-                        "tier":   tier,
-                        "inject": InjectSpec(kind="noop"),
-                        "verify": VerifySpec(kind="noop"),
-                        "notes":  "LLM-suggested param from requirement text.",
-                    },
-                }
+            result = self._lookup_from_direct_param(req_id)
 
+        result = self._apply_traceability_gate(req_id, result)
         self._catalogue_cache[req_id] = result
         return result
 
+    def _lookup_from_ast(
+        self, req_id: str, part_names: List[str]
+    ) -> Optional[Dict[str, Any]]:
+        """层2 fallback：AST 合成器。
+
+        遍历 satisfying parts 的合成 spec，把匹配 guard 的阈值填进 ``@guard``
+        占位符，避免模型里有 guard 却漏成 <unresolved:guard>。inject 可从
+        guard/action 名推断，但 verify 沿用 S4 固定的 MAVLink conformance 检查，
+        不回退到 run-to-run flaky 的 wait_statustext 模板。
+        """
+        for pname in part_names:
+            ast_candidates = self._ast_specs.get(pname, [])
+            if not ast_candidates:
+                continue
+            best = self._best_ast_spec(req_id, pname, ast_candidates)
+            if best is None:
+                continue
+            base_entry = self._tag_to_entry.get(best.tag)
+            if not base_entry:
+                continue
+            g_val, g_src = self._threshold_for_guard_var(
+                pname, best.guard_var,
+                base_entry.guard_matcher.operators
+                if base_entry.guard_matcher else None,
+            )
+            if self._verbose:
+                print(f"  [AST-SYN] {req_id} → tag={best.tag} "
+                      f"guard={best.guard_var!r} (part={pname})"
+                      + (f" thr={g_val}" if g_val is not None else ""))
+            d = self._entry_to_dict(base_entry, guard_val=g_val, guard_src=g_src)
+            verify = best.verify
+            if (
+                base_entry.verify is not None
+                and base_entry.verify.kind in {
+                    "assert_servo_pwm",
+                    "assert_sensor_unhealthy",
+                    "assert_arm_rejected",
+                    "wait_mode",
+                }
+            ):
+                verify = base_entry.verify
+            d["sitl_test"] = {
+                "tier":   base_entry.tier,
+                "inject": best.inject,
+                "verify": verify,
+                "notes":  base_entry.notes,
+            }
+            return d
+        return None
+
+    def _lookup_from_direct_param(self, req_id: str) -> Optional[Dict[str, Any]]:
+        direct = self._direct_param_map.get(req_id)
+        if not direct:
+            return None
+        param_name = direct["param"]
+        value      = direct["value"]
+        tier       = direct.get("tier", "L1")
+        if self._verbose:
+            print(f"  [REQ-PARAM] {req_id} → {param_name}={value} [{tier}]")
+        return {
+            "semantic_tag":        f"LLM_DIRECT:{param_name}",
+            "threshold_slot":      None,
+            "ardu_params":         {param_name: value},
+            "_resolved_guard_val": None,
+            "_resolved_attr_val":  None,
+            "sitl_test": {
+                "tier":   tier,
+                "inject": InjectSpec(kind="noop"),
+                "verify": VerifySpec(kind="noop"),
+                "notes":  "LLM-suggested param from requirement text.",
+            },
+        }
+
+    def _apply_traceability_gate(
+        self, req_id: str, result: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Reject semantically inconsistent mappings without breaking flow.
+
+        Tests are derived from model behavior (guard/action content); A4 adds the
+        cross-check: when the requirement text says GCS loss but the model behavior
+        maps to PARACHUTE, no parachute test is emitted under that requirement ID,
+        only a deterministic traceability mismatch.
+        """
+        contract_issue = self._contract_traceability_issue(req_id)
+        if contract_issue is not None:
+            self._traceability_mismatches[req_id] = contract_issue
+            return {
+                "semantic_tag": "TRACEABILITY_MISMATCH:CONTRACT_TRACE",
+                "threshold_slot": None,
+                "ardu_params": {},
+                "_resolved_guard_val": None,
+                "_resolved_attr_val": None,
+                "_traceability_mismatch": contract_issue,
+                "sitl_test": {
+                    "tier": "TRACE",
+                    "inject": InjectSpec(kind="skip", notes=contract_issue["message"]),
+                    "verify": VerifySpec(kind="skip", notes=contract_issue["message"]),
+                    "notes": contract_issue["message"],
+                },
+            }
+        if result is None:
+            self._traceability_mismatches.pop(req_id, None)
+            return None
+
+        tag = str(result.get("semantic_tag", ""))
+        expected = self._requirement_family(req_id)
+        matched = self._tag_family(tag)
+        detail = None
+        if expected is not None and matched is not None and expected != matched:
+            detail = {
+                "req_id": req_id,
+                "expected_family": expected,
+                "matched_family": matched,
+                "matched_tag": tag,
+                "requirement_text": self._req_texts.get(req_id, ""),
+                "message": (
+                    f"traceability mismatch: requirement text implies {expected}, "
+                    f"but guard/action mapping selected {tag} ({matched})"
+                ),
+            }
+        if detail is None:
+            detail = self._response_traceability_issue(req_id, tag)
+        if detail is None:
+            detail = self._action_traceability_issue(req_id, tag)
+        if detail is None:
+            self._traceability_mismatches.pop(req_id, None)
+            return result
+
+        self._traceability_mismatches[req_id] = detail
+        if self._verbose:
+            print(f"  [TRACE-MISMATCH] {req_id}: {detail['message']}")
+        return {
+            "semantic_tag": f"TRACEABILITY_MISMATCH:{tag}",
+            "threshold_slot": None,
+            "ardu_params": {},
+            "_resolved_guard_val": None,
+            "_resolved_attr_val": None,
+            "_traceability_mismatch": detail,
+            "sitl_test": {
+                "tier": "TRACE",
+                "inject": InjectSpec(kind="skip", notes=detail["message"]),
+                "verify": VerifySpec(kind="skip", notes=detail["message"]),
+                "notes": detail["message"],
+            },
+        }
+
+    def _contract_traceability_issue(self, req_id: str) -> Optional[Dict[str, str]]:
+        findings = self._contract_trace_findings.get(req_id, ())
+        if not findings:
+            return None
+        first = findings[0]
+        if isinstance(first, dict):
+            code = str(first.get("finding_code", "SEMANTIC_TRACE_FAILED"))
+            expected = first.get("expected", {})
+            observed = first.get("observed", {})
+        else:
+            code = str(getattr(first, "finding_code", "SEMANTIC_TRACE_FAILED"))
+            expected = getattr(first, "expected", {})
+            observed = getattr(first, "observed", {})
+        return {
+            "req_id": req_id,
+            "expected_family": "CONTRACT_TRACE",
+            "matched_family": "MODEL_TRACE",
+            "matched_tag": code,
+            "requirement_text": self._req_texts.get(req_id, ""),
+            "message": (
+                f"contract-first trace blocked test generation: {code}; "
+                f"expected={dict(expected)!r}; observed={dict(observed)!r}"
+            ),
+        }
+
+    def traceability_mismatches(self) -> List[Dict[str, str]]:
+        """Return SAFE requirement text/tag family mismatches discovered so far."""
+        for req_id in sorted(self._covered_req_ids()):
+            self._lookup_catalogue(req_id)
+        return [dict(v) for _, v in sorted(self._traceability_mismatches.items())]
+
+    @classmethod
+    def static_traceability_issues(cls, model_text: str,
+                                   model_name: str = "Model") -> List[str]:
+        """Refinement-actionable issues for response-traceability mismatches.
+
+        Runs the same deterministic gate that later withholds SITL evidence (no LLM,
+        no SITL process) against the in-session model text, so a response action that
+        emits the wrong command family - 8 of 24 archived runs hit it as a blocked
+        matrix row found only at Phase 9 - reaches the refinement loop while the
+        author can still repair it. Silent on any parse/link failure: advisory
+        projection only.
+        """
+        try:
+            from src.sysml.lite_model import build_lite_model
+            model = build_lite_model(str(model_text or ""), model_name=model_name)
+            mismatches = cls(model, llm=None).traceability_mismatches()
+        except Exception as exc:  # advisory projection does not break the loop
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.static_trace_issues", exc)
+            return []
+        issues: List[str] = []
+        for item in mismatches:
+            message = str(item.get("message") or "traceability mismatch")
+            issues.append(
+                f"[SITL-TRACE] {item.get('req_id')}: {message}. The flight-stack "
+                "test for this requirement is derived from the response the "
+                "model actually emits, so this mapping will be withheld at "
+                "verification. Repair the response action so its send matches "
+                "the requirement's commanded response (e.g. a parachute "
+                "requirement's response must send the parachute-command "
+                "payload through its command port, not the detected-failure "
+                "event or a generic mode command); keep the triggering "
+                "guard/accept unchanged."
+            )
+        return issues
+
+    def _extract_requirement_texts(self) -> Dict[str, str]:
+        try:
+            text = self._model.to_sysml_text() if self._model else ""
+        except Exception:
+            return {}
+        if not text:
+            return {}
+        result: Dict[str, str] = {}
+        for m in re.finditer(
+            r"requirement\s+def\s+([A-Za-z_][\w]*)\s*\{(?P<body>.*?)\}",
+            text,
+            re.S,
+        ):
+            req_id = m.group(1)
+            body = m.group("body")
+            doc = re.search(r"doc\s*/\*(.*?)\*/", body, re.S)
+            result[req_id] = (doc.group(1).strip() if doc else body.strip())
+        return result
+
+    @staticmethod
+    def _tag_family(tag: str) -> Optional[str]:
+        if tag.startswith("LLM_DIRECT:") or tag.startswith("TRACEABILITY_MISMATCH:"):
+            return None
+        tag = tag.upper()
+        if tag.startswith("BATTERY_"):
+            return "BATTERY"
+        if tag.startswith("GCS_LOSS"):
+            return "GCS"
+        if tag.startswith("SENSOR_"):
+            return "SENSOR"
+        if tag == "PARACHUTE_DEPLOY":
+            return "PARACHUTE"
+        if tag.startswith("PAYLOAD_"):
+            return "PAYLOAD"
+        if tag in {"ALTITUDE_FENCE", "RADIUS_FENCE"}:
+            return "GEOFENCE"
+        return None
+
+    def _requirement_family(self, req_id: str) -> Optional[str]:
+        families = self._requirement_families(req_id)
+        return next(iter(families)) if len(families) == 1 else None
+
+    def _requirement_families(self, req_id: str) -> set[str]:
+        """Infer fault-trigger families, excluding ordinary component mentions.
+
+        A requirement that merely uploads data to the GCS is not a GCS-loss
+        requirement, and a compound contingency naming several trigger families is
+        not proven by exercising one guard.
+        """
+        contract = self._contracts.get(req_id)
+        if contract is not None and contract.obligations:
+            families = {
+                {
+                    "battery_state_of_charge": "BATTERY",
+                    "sensor_self_test_failure": "SENSOR",
+                    "gcs_link_absent": "GCS",
+                    "delivery_abort_condition": "PAYLOAD",
+                    "delivery_waypoint_proximity": "PAYLOAD",
+                    "delivery_coordinate_condition_satisfied": "PAYLOAD",
+                    "critical_propulsion_failure": "PARACHUTE",
+                }.get(obligation.trigger.concept)
+                for obligation in contract.obligations
+                if obligation.trigger is not None
+            }
+            return {family for family in families if family}
+
+        text = self._req_texts.get(req_id, "")
+        low = f"{req_id} {text}".lower()
+        families: set[str] = set()
+
+        def has(*terms: str) -> bool:
+            return any(re.search(
+                rf"(?<![a-z0-9_]){re.escape(term)}(?![a-z0-9_])", low
+            ) for term in terms)
+
+        if has(
+            "battery", "state-of-charge", "state of charge", "soc",
+            "low voltage", "charge",
+        ):
+            families.add("BATTERY")
+        sensor_entity = has("sensor", "gps", "gnss", "imu", "magnetometer")
+        sensor_fault = has(
+            "self-test", "self test", "prearm", "pre-arm", "arming",
+            "failure", "failed", "fault", "unhealthy",
+        )
+        if has("self-test", "self test", "prearm", "pre-arm") or (
+            sensor_entity and sensor_fault
+        ):
+            families.add("SENSOR")
+        gcs_entity = has(
+            "gcs", "ground control", "uplink", "communication", "comm",
+            "data link", "datalink", "telemetry", "heartbeat",
+        )
+        gcs_fault = has(
+            "loss", "lost", "absent", "interrupted", "disconnect",
+            "unavailable", "outage", "timeout", "failsafe", "fail-safe",
+        )
+        if gcs_entity and gcs_fault:
+            families.add("GCS")
+        if has(
+            "delivery abort", "delivery-abort", "abort condition", "gripper",
+            "payload lock", "lock payload", "locked payload",
+            "payload in the mechanically locked",
+            "payload-release actuator shall default",
+            "default to the mechanically locked",
+        ):
+            families.add("PAYLOAD")
+        if has(
+            "geofence", "geo-fence", "fence", "airspace", "segregated airspace",
+            "boundary", "boundaries", "outside designated", "deviates",
+            "operational radius", "flight radius",
+        ):
+            families.add("GEOFENCE")
+        if has(
+            "parachute", "propulsion failure", "propulsion subsystem failure",
+            "engine failure", "motor failure", "critical propulsion",
+        ):
+            families.add("PARACHUTE")
+        return families
+
+    def _response_traceability_issue(
+        self, req_id: str, tag: str
+    ) -> Optional[Dict[str, str]]:
+        if not tag.upper().startswith("GCS_LOSS"):
+            return None
+        low = self._requirement_match_text(req_id).lower()
+        forbids_response = any(phrase in low for phrase in (
+            "without initiating", "shall not initiate", "must not initiate",
+            "shall not enter", "must not enter",
+        ))
+        bounded_below_trigger = any(phrase in low for phrase in (
+            "or less", "no more than", "less than", "before the", "until the",
+        ))
+        if not (forbids_response and bounded_below_trigger):
+            return None
+        return {
+            "req_id": req_id,
+            "expected_family": "GCS_NO_RESPONSE_BOUNDARY",
+            "matched_family": "GCS_POSITIVE_FAILSAFE",
+            "matched_tag": tag,
+            "requirement_text": self._req_texts.get(req_id, ""),
+            "message": (
+                "traceability mismatch: requirement forbids a GCS failsafe "
+                "response inside the boundary, but the selected test only proves "
+                "a positive response after link loss"
+            ),
+        }
+
+    def _preferred_semantic_tags(self, req_id: str) -> List[str]:
+        contract = self._contracts.get(req_id)
+        if contract is not None and contract.obligations:
+            preferences: list[str] = []
+            for obligation in contract.obligations:
+                trigger = obligation.trigger.concept if obligation.trigger else ""
+                response = obligation.response.concept if obligation.response else ""
+                tag = {
+                    ("battery_state_of_charge", "return_to_base"): "BATTERY_RTB",
+                    ("battery_state_of_charge", "controlled_landing"): "BATTERY_LAND",
+                    ("gcs_link_absent", "controlled_landing"): "GCS_LOSS_LAND",
+                    ("gcs_link_absent", "return_to_base"): "GCS_LOSS_RTL",
+                    ("sensor_self_test_failure", "prevent_arming"): "SENSOR_ARMING_INHIBIT",
+                    ("sensor_self_test_failure", "alert_gcs"): "SENSOR_GROUND_ALERT",
+                    ("critical_propulsion_failure", "deploy_parachute"): "PARACHUTE_DEPLOY",
+                    ("delivery_abort_condition", "lock_payload"): "PAYLOAD_ABORT_LOCK",
+                }.get((trigger, response))
+                if tag and tag not in preferences:
+                    preferences.append(tag)
+            if preferences:
+                return preferences
+        text = self._req_texts.get(req_id, "")
+        low = f"{req_id} {text}".lower()
+        family = self._requirement_family(req_id)
+        if family == "SENSOR":
+            if any(kw in low for kw in (
+                "not transition", "shall not transition", "not arm",
+                "armed or airborne", "prevent arming",
+            )):
+                return ["SENSOR_ARMING_INHIBIT", "SENSOR_GROUND_ALERT"]
+            if any(kw in low for kw in (
+                "issue a failure alert", "failure alert", "alert", "notify",
+                "ground control", "gcs",
+            )):
+                return ["SENSOR_GROUND_ALERT", "SENSOR_ARMING_INHIBIT"]
+            if any(kw in low for kw in (
+                "inhibit", "pre-flight startup inhibit",
+                "preflight startup inhibit", "prevent arming", "arming",
+            )):
+                return ["SENSOR_ARMING_INHIBIT", "SENSOR_GROUND_ALERT"]
+            return ["SENSOR_ARMING_INHIBIT", "SENSOR_GROUND_ALERT"]
+        if family == "BATTERY":
+            if any(kw in low for kw in ("land", "landing", "descent", "below 15", "15%")):
+                return ["BATTERY_LAND", "BATTERY_RTB"]
+            if any(kw in low for kw in ("return", "rtb", "rtl", "base")):
+                return ["BATTERY_RTB", "BATTERY_LAND"]
+        if family == "GCS":
+            # Action from the requirement text: land-only -> the failsafe action is
+            # LAND (RTL fails); return-only -> RTL. Text naming both, or neither,
+            # keeps the lenient legacy entry, where either reaction passes.
+            has_land = any(kw in low for kw in (
+                "land", "landing", "descend", "descent", "current position",
+            ))
+            has_rtl = any(kw in low for kw in ("return", "rtl", "rtb", "base", "home"))
+            if has_land and not has_rtl:
+                return ["GCS_LOSS_LAND", "GCS_LOSS", "GCS_LOSS_RTL"]
+            if has_rtl and not has_land:
+                return ["GCS_LOSS_RTL", "GCS_LOSS", "GCS_LOSS_LAND"]
+            return ["GCS_LOSS", "GCS_LOSS_RTL", "GCS_LOSS_LAND"]
+        return []
+
     def _best_ast_spec(self, req_id: str, part_name: str, candidates):
-        """
-        从同一 part 的多个 AST 合成结果中，选与该 req 的 guard 最匹配的那个。
-        利用 _guard_map 里该 part 的 guard 属性集合做交叉比对。
-        """
         if len(candidates) == 1:
             return candidates[0]
 
-        # 用该 req part 的 guard 属性名做匹配
         part_guards = self._guard_map.get(part_name, [])
         part_guard_attrs = {
             getattr(g, "attribute", "").lower()
@@ -886,8 +1337,7 @@ class RequirementLinker:
         for cand in candidates:
             score = 0
             if cand.guard_var.lower() in part_guard_attrs:
-                score += 3   # guard 变量直接匹配
-            # req_id 词元 vs candidate tag 词元
+                score += 3
             req_tokens = set(req_id.lower().replace("_", " ").split())
             tag_tokens = set(cand.tag.lower().replace("_", " ").split())
             score += len(req_tokens & tag_tokens)
@@ -896,15 +1346,64 @@ class RequirementLinker:
 
         return best if best_score >= 0 else None
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     # 这些参数在 SITL 里设置会破坏仿真（如 GPS、EKF），
     # 只做 L1 验证（检 resolved 值），不写进 .parm 文件
     _SITL_SKIP_PARAMS: set = {
         "SCHED_LOOP_RATE",  # 改调度频率会破坏 SITL GPS 仿真，让 SITL 用默认 400Hz
     }
+
+    def compile_evidence(self) -> RequirementEvidenceBundle:
+        """Compile one immutable evidence bundle for this model revision."""
+        if self._evidence_bundle is not None:
+            return self._evidence_bundle
+
+        model_text = self._model.to_sysml_text() or ""
+        assignments: Dict[str, GuardEvidence] = {}
+        for req_id, assigned in self._guard_assignment.items():
+            if not assigned:
+                continue
+            guard = assigned.get("guard")
+            assignments[req_id] = GuardEvidence(
+                part_name=str(assigned.get("part", "")),
+                attribute=str(getattr(guard, "attribute", "?")),
+                kind=str(getattr(guard, "kind", "")),
+                operator=str(getattr(guard, "operator", "")),
+                threshold=getattr(guard, "threshold", None),
+                signature=(
+                    getattr(guard, "kind", None),
+                    getattr(guard, "attribute", None),
+                    getattr(guard, "operator", None),
+                    getattr(guard, "threshold", None),
+                    getattr(guard, "enum_type", None),
+                    getattr(guard, "enum_value", None),
+                ),
+            )
+
+        specs = tuple(self.generate_test_specs())
+        resolved = tuple(self._resolve_all())
+        mismatches = tuple(
+            MappingProxyType(dict(item))
+            for item in self.traceability_mismatches()
+        )
+        coverage = MappingProxyType({
+            key: tuple(value) if isinstance(value, list) else value
+            for key, value in self.coverage_stats().items()
+        })
+        self._evidence_bundle = RequirementEvidenceBundle(
+            model_text=model_text,
+            requirement_texts=MappingProxyType(dict(self._req_texts)),
+            satisfying_parts=MappingProxyType({
+                req_id: tuple(parts)
+                for req_id, parts in self._satisfy_map.items()
+            }),
+            guard_assignments=MappingProxyType(assignments),
+            test_specs=specs,
+            resolved_params=resolved,
+            parm_file=self.generate_parm_file(),
+            traceability_mismatches=mismatches,
+            coverage=coverage,
+        )
+        return self._evidence_bundle
 
     def generate_parm_file(self) -> str:
         resolved = self._resolve_all()
@@ -916,14 +1415,12 @@ class RequirementLinker:
         seen: Dict[str, str] = {}
         for rp in resolved:
             val = self._format_value(rp.value)
-            # 跳过未解析的值（ArduCopter 解析到非数字会行为异常）
             if isinstance(rp.value, str) and rp.value.startswith("<"):
                 lines.append(f"# SKIPPED {rp.param_name}: {val}  [{rp.source}]")
                 continue
             if isinstance(rp.value, str) and "@" in rp.value:
                 lines.append(f"# SKIPPED {rp.param_name}: {val}  [{rp.source}]")
                 continue
-            # 跳过 SITL 不兼容参数（L1 仍验证 resolved 值，但不写进 .parm）
             if rp.param_name in self._SITL_SKIP_PARAMS:
                 lines.append(f"# SITL-SKIP {rp.param_name}: {val}  (L1-validated, not loaded into SITL)")
                 continue
@@ -935,11 +1432,31 @@ class RequirementLinker:
             elif seen[key] != val:
                 lines.append(f"# CONFLICT {key}: {seen[key]} vs {val} ({rp.req_id})")
 
-        # CHUTE_ALT_MIN=0：测试时不限制降落伞触发高度
         if "CHUTE_ENABLED" in seen and "CHUTE_ALT_MIN" not in seen:
             lines.append(f"{'CHUTE_ALT_MIN':<30} 0  # SITL test: disable alt threshold")
 
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _bind_verify_args(verify, attr_val):
+        """Resolve ``@attr_match`` inside a verify spec's args.
+
+        A threshold the check compares against comes from the model, the same way an
+        ``ardu_params`` value does. When it cannot be resolved the spec is dropped
+        rather than run against a default: a check that invents its own limit reports
+        a verdict about nothing.
+        """
+        if verify is None:
+            return verify
+        args = dict(getattr(verify, "args", {}) or {})
+        if not any(v == "@attr_match" for v in args.values()):
+            return verify
+        if attr_val is None or float(attr_val) <= 0:
+            return None
+        for key, value in list(args.items()):
+            if value == "@attr_match":
+                args[key] = float(attr_val)
+        return replace(verify, args=args)
 
     def generate_test_specs(self) -> List[SITLTestSpec]:
         specs: List[SITLTestSpec] = []
@@ -952,29 +1469,42 @@ class RequirementLinker:
             if cat is None:
                 continue
             st = cat["sitl_test"]
-            specs.append(SITLTestSpec(
-                req_id=req_id,
-                tier=st["tier"],
-                inject=st.get("inject"),
-                verify=st.get("verify"),
-                notes=st.get("notes", ""),
-                params=resolved_by_req.get(req_id, []),
-            ))
+            verify = self._bind_verify_args(
+                st.get("verify"), cat.get("_resolved_attr_val"))
+            if verify is not None:
+                specs.append(SITLTestSpec(
+                    req_id=req_id,
+                    tier=st["tier"],
+                    inject=st.get("inject"),
+                    verify=verify,
+                    notes=st.get("notes", ""),
+                    params=tuple(resolved_by_req.get(req_id, [])),
+                ))
+            l2 = cat.get("l2_test")
+            if l2 is not None:
+                # 同一需求的附加 L2 行为检查（如 FENCE 缩尺执法）；参数
+                # 已由主 spec 携带并写入启动 .parm，这里不重复。
+                l2_verify = self._bind_verify_args(
+                    l2.get("verify"), cat.get("_resolved_attr_val"))
+                if l2_verify is not None:
+                    specs.append(SITLTestSpec(
+                        req_id=req_id,
+                        tier="L2",
+                        inject=l2.get("inject"),
+                        verify=l2_verify,
+                        notes=l2.get("notes", ""),
+                        params=(),
+                    ))
         return specs
 
-    # ------------------------------------------------------------------
-    # SITL → LLM feedback
-    # ------------------------------------------------------------------
-
     def unresolved_feedback(self) -> List[Dict[str, Any]]:
-        """Turn every unresolved SITL parameter into an actionable model-fix
+        """Turn each unresolved SITL parameter into an actionable model-fix
         instruction for the design LLM.
 
-        After the AST-synthesis threshold fix, an unresolved parameter is a
-        trustworthy "model defect" signal: the requirement matched a catalogue
-        tag, but the model genuinely lacks the guard/attribute the tag needs to
-        supply a value.  Each item names the satisfying part, what element is
-        missing, and which ArduPilot parameter depends on it.
+        Since the AST-synthesis threshold fix, an unresolved parameter means the
+        requirement matched a catalogue tag but the model lacks the guard/attribute
+        that tag needs for a value. Each item names the satisfying part, the missing
+        element, and the ArduPilot parameter that depends on it.
 
         Returns a list of dicts: {req_id, tag, kind, part, param, message}.
         """
@@ -1003,16 +1533,14 @@ class RequirementLinker:
 
     @staticmethod
     def _unresolved_message(req_id, tag, entry, kind, part, param_name) -> str:
-        """State what the model is missing and why it matters — WITHOUT
-        prescribing SysML syntax.
+        """State what the model is missing and why it matters, without prescribing
+        SysML syntax.
 
-        The generation prompt already teaches canonical SysML v2 transition/
-        attribute syntax; re-teaching it here is redundant and risky (a
-        hand-written fragment that drifts from the canonical form would
-        actively mislead the LLM, like the earlier `readonly` mistake).  So the
-        feedback gives only semantic facts — which part, what quantity must be
-        monitored/declared, which ArduPilot parameter depends on it — and lets
-        the LLM apply its own (prompt-grounded, syntax-gate-validated) code.
+        The generation prompt already teaches canonical SysML v2 transition/attribute
+        syntax, and a hand-written fragment that drifts from it misleads the LLM (the
+        earlier `readonly` mistake). So the feedback gives semantic facts only -
+        which part, what quantity to monitor or declare, which ArduPilot parameter
+        depends on it - and lets the LLM write its own syntax-gate-validated code.
         """
         gm = getattr(entry, "guard_matcher", None) if entry else None
         am = getattr(entry, "attr_matcher", None) if entry else None
@@ -1048,18 +1576,46 @@ class RequirementLinker:
             f"is missing the guard/attribute it maps from on part `{part}`."
         )
 
+    def coverage_stats(self) -> Dict[str, Any]:
+        """Machine-readable coverage classification (the numbers behind coverage_report).
+
+        "unmapped" is the gap bucket: requirements the model satisfies that no SITL
+        check verifies at any tier. Reports carry this count so "traceability
+        blocked = 0" is not read as "everything verified".
+        """
+        covered = self._covered_req_ids()
+        mapped: set = set()
+        mismatched: set = set()
+        for r in covered:
+            entry = self._lookup_catalogue(r)
+            if entry is None:
+                continue
+            tag = str(entry.get("semantic_tag", ""))
+            (mismatched if tag.startswith("TRACEABILITY_MISMATCH:") else mapped).add(r)
+        unmapped = covered - mapped - mismatched
+        return {
+            "satisfied": len(covered),
+            "mapped": len(mapped),
+            "traceability_mismatched": len(mismatched),
+            "unmapped": len(unmapped),
+            "unmapped_req_ids": sorted(unmapped),
+        }
+
     def coverage_report(self) -> str:
         covered = self._covered_req_ids()
         matched_content, matched_ast, matched_llm, matched_direct = (
             set(), set(), set(), set()
         )
+        mismatched = set()
 
         for r in covered:
             entry = self._lookup_catalogue(r)
             if entry is None:
                 continue
             tag = entry.get("semantic_tag", "")
-            if tag.startswith("LLM_DIRECT:"):
+            if tag.startswith("TRACEABILITY_MISMATCH:"):
+                mismatched.add(r)
+            elif tag.startswith("LLM_DIRECT:"):
                 matched_direct.add(r)
             elif r in self._semantic_map:
                 matched_llm.add(r)
@@ -1069,7 +1625,7 @@ class RequirementLinker:
                 matched_content.add(r)
 
         matched   = matched_content | matched_ast | matched_llm | matched_direct
-        unmatched = covered - matched
+        unmatched = covered - matched - mismatched
 
         lines = [
             f"Coverage report — {self._model.name}",
@@ -1079,6 +1635,7 @@ class RequirementLinker:
             f"  Mapped via LLM tag       : {len(matched_llm)}",
             f"  Mapped via LLM req-text  : {len(matched_direct)}",
             f"  Mapped total             : {len(matched)}",
+            f"  Traceability mismatches  : {len(mismatched)}",
             "",
             "Mapped requirements:",
         ]
@@ -1101,22 +1658,26 @@ class RequirementLinker:
             tier = entry["sitl_test"]["tier"] if entry else "?"
             param = entry.get("semantic_tag", "?").replace("LLM_DIRECT:", "") if entry else "?"
             lines.append(f"  ✓ {r:<22} [{tier}] (llm-direct:{param})")
+        if mismatched:
+            lines.append("\nTraceability mismatches (not verified):")
+            details = {d["req_id"]: d for d in self.traceability_mismatches()}
+            for r in sorted(mismatched):
+                d = details.get(r, {})
+                lines.append(
+                    f"  ✗ {r:<22} expected={d.get('expected_family', '?')} "
+                    f"matched={d.get('matched_tag', '?')}"
+                )
         if unmatched:
             lines.append("\nSatisfied but no mapping (skipped):")
             for r in sorted(unmatched):
                 lines.append(f"  – {r}")
         return "\n".join(lines)
 
-    # ------------------------------------------------------------------
-    # Build maps from AST
-    # ------------------------------------------------------------------
-
     def _build_satisfy_map(self) -> Dict[str, List[str]]:
-        """
-        req_id → [part_name, ...]
+        """req_id -> [part_name, ...]
 
-        SysML v2 允许多个 part 同时 satisfy 同一 REQ（联合满足、分层满足、冗余满足）。
-        保留所有满足关系；后续解析按"谁有 guard 就用谁"选取，不靠迭代顺序。
+        SysML v2 允许多个 part 同时 satisfy 同一 REQ（联合、分层、冗余满足），
+        全部保留；后续解析按"谁有 guard 就用谁"选取，不靠迭代顺序。
         """
         m: Dict[str, List[str]] = {}
         for part in self._model.part_definitions:
@@ -1125,14 +1686,9 @@ class RequirementLinker:
         return m
 
     def _build_guard_map(self) -> Dict[str, List[Any]]:
-        """
-        part_name → 该 part 的状态机 guard 列表。
-        使用 state_extractor 提取，与 behavioral_sim 共享同一 AST 路径。
-        """
         from src.simulation.state_extractor import extract_state_machines
         guard_map: Dict[str, List[Any]] = {}
         try:
-            # extract_state_machines 接收 SysML 原始文本，不是 LiteModel 对象
             sysml_text = self._model.to_sysml_text()
             if not sysml_text:
                 return guard_map
@@ -1140,18 +1696,28 @@ class RequirementLinker:
             for sm in state_machines:
                 for trans in sm.fault_transitions():
                     guard_map.setdefault(sm.owner_part, []).extend(trans.guards)
-        except Exception:
+                # accept 事件驱动的转移没有 guard，fault_transitions() 收不到；以伪 guard
+                # 并入，让事件写法与 guard 写法共用同一条独占分配/匹配管线（只有显式声明
+                # "event" operator 的条目匹配它们，存量 bool/comparison 条目行为不变）。
+                for trans in sm.transitions:
+                    if trans.is_initial or trans.guards or not trans.accept_trigger:
+                        continue
+                    guard_map.setdefault(sm.owner_part, []).append(
+                        AcceptEventGuard(attribute=str(trans.accept_trigger))
+                    )
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.guard_map", exc)
             pass
         return guard_map
 
     def _build_syside_attr_map(self) -> Dict[str, Dict[str, float]]:
-        """
-        Walk the syside AST and evaluate every AttributeUsage expression,
-        grouped by owner part name.  Returns {part_name: {attr_name: float}}.
+        """Evaluate every AttributeUsage expression in the syside AST, grouped by
+        owner part name.  Returns {part_name: {attr_name: float}}.
 
-        Handles arithmetic expressions and unit-bearing literals that
-        _parse_attr_value (regex-based) cannot evaluate.
-        Falls back to {} when syside is unavailable or parsing fails.
+        Handles arithmetic expressions and unit-bearing literals that the
+        regex-based _parse_attr_value cannot evaluate; returns {} when syside is
+        unavailable or parsing fails.
         """
         if not _SYSIDE_OK:
             return {}
@@ -1170,20 +1736,51 @@ class RequirementLinker:
                     part_name = getattr(owner, "name", None)
                     if not part_name:
                         continue
+                    # An AttributeUsage need not be named: a redefinition
+                    # like `attribute :>> mass = 5[kg];` is legal and reports
+                    # name None, and keying the map on that leaked a None into
+                    # every later keyword scan over attr names.
+                    attr_name = getattr(attr, "name", None)
+                    if not attr_name:
+                        continue
                     expr = attr.feature_value_expression
                     if expr is None:
                         continue
                     val, report = compiler.evaluate(expr)
-                    if not report.fatal and val is not None:
-                        result.setdefault(part_name, {})[attr.name] = float(val)
-                except Exception:
+                    if not report.fatal:
+                        from src.utils.syside_utils import coerce_static_number
+                        number = coerce_static_number(val)
+                        if number is not None:
+                            result.setdefault(part_name, {})[attr_name] = number
+                except Exception as exc:
+                    from src.utils.suppressed import record_suppressed
+                    record_suppressed("sitl.requirement_linker.syside_attr_node", exc)
                     pass
-        except Exception:
+        except Exception as exc:
+            from src.utils.suppressed import record_suppressed
+            record_suppressed("sitl.requirement_linker.syside_attr_map", exc)
             pass
         return result
 
+    def _build_port_map(self) -> Dict[str, List[str]]:
+        """part_name -> [port names]。
+
+        接口/配置类需求的 satisfy 目标（CommunicationSystem、PerceptionSystem）
+        在 SysML 里可以只声明 port（``in port gnssCorrections``）而无属性；
+        AttrMatcher 声明 ``allow_port_match`` 时以 port 名为匹配面。port 无数值，
+        因此只允许全静态 ardu_params 的条目走这条路（_match_by_content 强制检查）。
+        """
+        result: Dict[str, List[str]] = {}
+        for part in self._model.part_definitions:
+            names = [
+                str(port.name) for port in getattr(part, "ports", [])
+                if getattr(port, "name", None)
+            ]
+            if names:
+                result[part.name] = names
+        return result
+
     def _build_attr_map(self) -> Dict[str, Dict[str, float]]:
-        """part_name → {attr_name: float}，用于 @attr: 直接读属性的情况。"""
         result: Dict[str, Dict[str, float]] = {}
         for part in self._model.part_definitions:
             attrs: Dict[str, float] = {}
@@ -1193,33 +1790,20 @@ class RequirementLinker:
                     attrs[attr.name] = val
             result[part.name] = attrs
 
-        # Augment with syside-evaluated values: handles expressions like
-        # `= 10.0 [m/s]` or `= mass * g` that _parse_attr_value regex misses.
-        # Syside values take precedence when they successfully evaluate.
+        # Augment with syside-evaluated values: expressions like `= 10.0 [m/s]` or
+        # `= mass * g` that the _parse_attr_value regex misses. Syside values win
+        # when they evaluate.
         for part_name, syside_attrs in self._build_syside_attr_map().items():
             result.setdefault(part_name, {}).update(syside_attrs)
 
         return result
 
-    # ------------------------------------------------------------------
-    # 解析
-    # ------------------------------------------------------------------
-
     def _covered_req_ids(self) -> set:
         return set(self._satisfy_map.keys())
 
     def _resolve_all(self) -> List[ResolvedParam]:
-        """
-        遍历所有已映射的 REQ，将 ardu_params 的 token 解析为实际数值。
-
-        token 解析优先级（内容匹配后已预解析的值优先）：
-          @guard       → cat["_resolved_guard_val"]（内容匹配已算好）
-          @attr_match  → cat["_resolved_attr_val"]（内容匹配已算好）
-          @attr:name   → 关键词搜索属性值
-          @attr:name*N → 同上 × N
-          @guard*N / @guard_attr*N → parachute delay 特殊处理
-          number       → 直接使用
-        """
+        if self._resolved_cache is not None:
+            return list(self._resolved_cache)
         results: List[ResolvedParam] = []
         for req_id in self._covered_req_ids():
             cat = self._lookup_catalogue(req_id)
@@ -1229,13 +1813,11 @@ class RequirementLinker:
             part_names = self._satisfy_map[req_id]
             part_name  = part_names[0]
 
-            # 从 cat 取出预解析值（内容匹配路径已解析，其他路径为 None）
             pre_guard_val = cat.get("_resolved_guard_val")
             pre_guard_src = cat.get("_resolved_guard_src") or "guard"
             pre_attr_val  = cat.get("_resolved_attr_val")
             pre_attr_src  = cat.get("_resolved_attr_src") or "attr"
 
-            # parachute delay：按关键词搜索属性（兼容新旧路径）
             chute_delay: Optional[float] = None
             if "CHUTE_DELAY_MS" in cat.get("ardu_params", {}):
                 for pname in part_names:
@@ -1247,27 +1829,24 @@ class RequirementLinker:
             for param_name, raw_value in cat["ardu_params"].items():
                 if raw_value == "@guard":
                     val = pre_guard_val if pre_guard_val is not None \
-                          else f"<unresolved:guard>"
+                          else "<unresolved:guard>"
                     src = pre_guard_src
 
                 elif raw_value == "@attr_match":
-                    # AttrMatcher 已预解析（含单位换算）
                     val = pre_attr_val if pre_attr_val is not None \
-                          else f"<unresolved:attr_match>"
+                          else "<unresolved:attr_match>"
                     src = pre_attr_src
 
                 elif isinstance(raw_value, str) and (
                     raw_value.startswith("@guard*") or
                     raw_value.startswith("@guard_attr*")
                 ):
-                    # parachute: parachuteDeployTime × 1000
                     val = (round(chute_delay * 1000)
                            if chute_delay is not None
                            else "<unresolved:chute_delay>")
                     src = "attr:parachute*1000" if chute_delay else "unresolved"
 
                 elif isinstance(raw_value, str) and raw_value.startswith("@attr:"):
-                    # @attr:name 或 @attr:name*N
                     rest = raw_value[6:]
                     if "*" in rest:
                         attr_name, factor_str = rest.split("*", 1)
@@ -1290,7 +1869,8 @@ class RequirementLinker:
                     value=val,
                     source=src,
                 ))
-        return results
+        self._resolved_cache = tuple(results)
+        return list(self._resolved_cache)
 
     def _threshold_for_guard_var(
         self,
@@ -1298,17 +1878,14 @@ class RequirementLinker:
         guard_var: str,
         operators: Optional[List[str]] = None,
     ) -> Tuple[Optional[float], str]:
-        """Resolve the numeric threshold of the model guard whose attribute
-        matches *guard_var* (the variable the AST synthesizer matched).
+        """Resolve the numeric threshold of the model guard whose attribute matches
+        *guard_var* (the variable the AST synthesizer matched).
 
-        Used by the AST-synthesis layer so `@guard` placeholders are filled
-        from the guard that layer actually found — instead of leaking as
-        `<unresolved:guard>` even though the model contains the guard.
-
-        When *operators* is given (the tag's expected operators), a guard
-        whose operator is in that set is preferred.  Returns (None, "") when
-        no matching guard carries a numeric threshold (e.g. a boolean guard,
-        which needs no threshold).
+        Fills `@guard` placeholders from the guard that layer actually found instead
+        of leaking `<unresolved:guard>`. With *operators* given (the tag's expected
+        operators), a guard whose operator is in that set is preferred. Returns
+        (None, "") when no matching guard carries a numeric threshold, e.g. a
+        boolean guard.
         """
         gv = (guard_var or "").lower()
         cands = [
@@ -1327,44 +1904,13 @@ class RequirementLinker:
         th = float(getattr(g, "threshold"))
         return th, f"guard:{op}:{th} (attr:{getattr(g, 'attribute', '?')}, ast)"
 
-    def _extract_guard_threshold(
-        self,
-        part_name: str,
-        operator: str,
-        index: int,
-    ) -> Tuple[Optional[float], str]:
-        """
-        在 part_name 的状态机 guard 里，找第 index 个 operator 匹配的
-        guard，返回 (threshold, source_description)。
-        按阈值升序排（小的先返回）。
-        """
-        guards = self._guard_map.get(part_name, [])
-        matched = []
-        for g in guards:
-            if getattr(g, "operator", None) == operator:
-                t = getattr(g, "threshold", None)
-                if t is not None:
-                    matched.append((t, g))
-
-        matched.sort(key=lambda x: x[0])
-        if index < len(matched):
-            t, g = matched[index]
-            attr = getattr(g, "attribute", "?")
-            return t, f"guard:{operator}:{t} (attr:{attr})"
-        return None, ""
-
     def _extract_chute_delay(self, part_name: str) -> Optional[float]:
-        """
-        在 part_name 的属性里，找 parachute/deploy 相关的时间属性。
-        使用语义关键词匹配，不依赖精确属性名。
-        """
         attrs = self._attr_map.get(part_name, {})
         keywords = ["parachute", "deploy", "chute"]
         for name, val in attrs.items():
             nl = name.lower()
             if any(k in nl for k in keywords) and 0.1 <= val <= 5.0:
                 return val
-        # fallback: 找值在 [0.1, 5.0] 范围内的时间属性（秒）
         time_keywords = ["time", "delay", "timeout"]
         for name, val in attrs.items():
             nl = name.lower()
@@ -1377,20 +1923,13 @@ class RequirementLinker:
         part_name: str,
         attr_name: str,
     ) -> Tuple[Any, str]:
-        """
-        在 part_name 的所有属性里，优先精确名字匹配，
-        否则做宽松关键词匹配。
-        """
-        # 先找与 satisfy 该需求的 part，再向其他 part 扩展
         all_parts = [p for p in self._model.part_definitions if p.name == part_name]
         all_parts += [p for p in self._model.part_definitions if p.name != part_name]
 
         for part in all_parts:
             attrs = self._attr_map.get(part.name, {})
-            # 精确匹配
             if attr_name in attrs:
                 return attrs[attr_name], f"attr:{part.name}.{attr_name}"
-            # 宽松：attr_name 的关键词子集
             keywords = re.sub(r'([A-Z])', r' \1', attr_name).lower().split()
             for aname, aval in attrs.items():
                 aname_lower = re.sub(r'([A-Z])', r' \1', aname).lower()

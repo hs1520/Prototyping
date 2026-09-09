@@ -1,5 +1,3 @@
-"""Tests for Pinecone-backed RAG retriever behavior."""
-
 from pathlib import Path
 
 import pytest
@@ -140,7 +138,7 @@ class TestRAGRetriever:
         assert isinstance(formatted, str)
         assert "No relevant context found" in formatted
 
-    def test_retrieve_includes_official_sysml_reference_when_enabled(self, tmp_path: Path):
+    def test_includes_official_reference(self, tmp_path: Path):
         release_root = tmp_path / "SysML-v2-release-src"
         source_file = release_root / "training" / "ports" / "PortsExample.sysml"
         source_file.parent.mkdir(parents=True, exist_ok=True)
@@ -172,7 +170,7 @@ class TestRAGRetriever:
         formatted = context.format_for_prompt()
         assert "Official SysML v2 reference snippet" in formatted
 
-    def test_retrieve_ignores_disallowed_extension(self, tmp_path: Path):
+    def test_ignores_disallowed_extension(self, tmp_path: Path):
         release_root = tmp_path / "SysML-v2-release-src"
         text_file = release_root / "training" / "ports" / "PortsExample.txt"
         text_file.parent.mkdir(parents=True, exist_ok=True)

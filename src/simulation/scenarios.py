@@ -1,5 +1,4 @@
-"""
-scenarios.py
+"""scenarios.py
 
 Scenario definitions for SysML v2 structural reachability simulation.
 
@@ -7,29 +6,26 @@ A Scenario specifies a named operational sequence that must be structurally
 reachable in the port-connection graph:
   - entry_nodes:    starting parts (PartUsage names)
   - target_nodes:   all must be reachable from some entry node
-  - required_nodes: every node here must lie on some entry→target path
+  - required_nodes: every node here must lie on some entry->target path
 
 Scenario generation strategy
 ─────────────────────────────
 ``auto_detect_scenarios`` builds scenarios from the BehavioralGraph itself,
-using a **priority-stacked** classification of each PartNode:
+using a priority-stacked classification of each PartNode:
 
-  P1. Satisfy relationships  — if satisfied_reqs contains recognisable safety/
-      comms/power requirement IDs, that category wins (strongest signal).
-  P2. Port direction topology — a part with only OUT ports is structurally a
-      source (→ "sensor"); only IN ports is a sink (→ "actuator"); mixed IN+OUT
-      is a hub (→ keywords decide sub-class, else "controller").
-  P3. Keyword matching       — existing bucket keywords on usage + def names,
-      used to sub-classify hubs and no-port parts.
-  P4. Topology tiebreaker    — unnamed hubs (both in and out ports, no keyword
-      match) are promoted to "controller" so they always appear in scenarios.
-  P5. "other" fallback       — remaining unclassified parts are added to a
-      hub-fallback pool; the highest-degree hub in this pool generates a
-      generic connectivity scenario so no part is silently dropped.
+  P1. Satisfy relationships  - satisfied_reqs carrying recognisable safety/
+      comms/power requirement IDs win.
+  P2. Port direction topology - only OUT ports is a source (-> "sensor");
+      only IN ports is a sink (-> "actuator"); mixed IN+OUT is a hub
+      (-> keywords decide sub-class, else "controller").
+  P3. Keyword matching       - bucket keywords on usage + def names, used to
+      sub-classify hubs and no-port parts.
+  P4. Topology tiebreaker    - unnamed hubs are promoted to "controller".
+  P5. "other" fallback       - remaining parts join a hub-fallback pool; the
+      highest-degree hub there generates a generic connectivity scenario.
 
-Isolated parts (no connect statements) are intentionally included so
-the validator catches them as failing scenarios and reports them as
-design defects.
+Isolated parts (no connect statements) are included so the validator catches
+them as failing scenarios and reports them as design defects.
 """
 
 from __future__ import annotations
@@ -50,10 +46,6 @@ class Scenario:
     forbidden_nodes: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
 
-
-# ---------------------------------------------------------------------------
-# Drone reference scenarios (kept for backward compatibility / direct use)
-# ---------------------------------------------------------------------------
 
 DRONE_SCENARIOS: List[Scenario] = [
     Scenario(
@@ -94,10 +86,6 @@ DRONE_SCENARIOS: List[Scenario] = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Part classification keywords
-# ---------------------------------------------------------------------------
-
 _SAFETY_KEYWORDS   = {"safety", "monitor", "emergency", "fault", "watchdog",
                        "failsafe", "supervisor"}
 _CONTROL_KEYWORDS  = {"controller", "control", "flight", "manager", "processor",
@@ -110,14 +98,12 @@ _POWER_KEYWORDS    = {"power", "battery", "energy", "supply", "bms",
                        "propulsion", "motor", "esc", "thruster"}
 _ACTUATOR_KEYWORDS = {"actuator", "servo", "pump", "payload", "arm",
                        "wheel", "gimbal", "mechanism"}
-# Passive mechanical / structural parts.  These carry no signal role, so they
-# must NOT generate telemetry/control/uplink scenarios.  A part matching these
-# is classified "structure" and only participates in power-target scenarios.
+# Passive mechanical / structural parts. They carry no signal role, so they
+# generate no telemetry/control/uplink scenarios: a match is classified
+# "structure" and participates only in power-target scenarios.
 _STRUCTURE_KEYWORDS = {"airframe", "chassis", "frame", "fuselage", "housing",
                        "enclosure", "structure", "hull"}
 
-# Requirement-name prefixes that map to a class unambiguously.
-# (Only fragments that reliably indicate the *owning* part's role.)
 _REQ_SAFETY_KW = {"safe", "emerg", "fault", "watchdog"}
 _REQ_COMMS_KW  = {"comm", "comms", "telemetry", "link"}
 _REQ_POWER_KW  = {"power", "batt", "energy"}
@@ -126,13 +112,10 @@ _REQ_POWER_KW  = {"power", "batt", "energy"}
 # ---------------------------------------------------------------------------
 # Production-oriented port-name lexicons
 # ---------------------------------------------------------------------------
-# A part's functional role is defined by WHAT IT PRODUCES.  These tokens are
-# matched ONLY against OUT (and inout) port names — an out-port names what the
-# part emits, so it indicates the part's role as a signal source.  (An IN-port
-# name describes what the part consumes, i.e. the *other* party's output, so it
-# must NOT drive this part's classification — that is the mistake naive
-# port-name matching makes, e.g. a controller's `in sensorData` does not make
-# it a sensor.)
+# A part's functional role follows from what it produces, so these tokens are
+# matched only against out (and inout) port names. An in-port name describes
+# the other party's output and does not classify this part: a controller's
+# `in sensorData` does not make it a sensor.
 #
 # Ordered most-distinctive-first; the first category a part produces wins.
 _PRODUCE_SAFETY = ("override", "recovery", "emergency", "failsafe",
@@ -144,13 +127,12 @@ _PRODUCE_SENSOR = ("sensordata", "sensor", "nav", "gps", "gnss", "imu",
                    "lidar", "radar", "perception", "position", "attitude", "odom")
 _PRODUCE_POWER  = ("power", "energy", "battery", "volt", "current",
                    "charge", "thermal")
-# IN-port command tokens — a pure consumer of commands (produces nothing) is an
-# actuator/effector.
+# In-port command tokens: a pure consumer of commands is an actuator/effector.
 _CONSUME_CMD    = ("cmd", "command", "release", "actuate", "drive", "throttle")
 
-# Ordered production rules: (lexicon, role).  Safety before comms before
-# controller so that override/recovery commands and gcs/telemetry downlinks are
-# not swallowed by the generic command (`cmd`) controller token.
+# Ordered production rules: (lexicon, role). Safety before comms before
+# controller so override/recovery and gcs/telemetry names are not swallowed
+# by the generic `cmd` controller token.
 _PRODUCTION_RULES = (
     (_PRODUCE_SAFETY, "safety"),
     (_PRODUCE_COMMS,  "comms"),
@@ -160,12 +142,7 @@ _PRODUCTION_RULES = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Topology helpers
-# ---------------------------------------------------------------------------
-
 def _port_topology(node: PartNode, bg: BehavioralGraph) -> Tuple[bool, bool]:
-    """Return (has_out, has_in) for *node*'s ports in *bg*."""
     part_ports = [bg.ports[pid] for pid in node.port_ids if pid in bg.ports]
     has_out = any(p.direction in ("out", "inout") for p in part_ports)
     has_in  = any(p.direction in ("in",  "inout") for p in part_ports)
@@ -173,10 +150,10 @@ def _port_topology(node: PartNode, bg: BehavioralGraph) -> Tuple[bool, bool]:
 
 
 def _part_degrees(bg: BehavioralGraph) -> Dict[str, int]:
-    """
-    Compute the number of distinct connection endpoints (degree) for each part.
-    Used as a proxy for graph centrality — the highest-degree part is the
-    most likely primary hub / controller.
+    """Compute the number of distinct connection endpoints (degree) per part.
+
+    Used as a centrality proxy: the highest-degree part is the likely primary
+    hub / controller.
     """
     degrees: Dict[str, int] = {p: 0 for p in bg.parts}
     for conn in bg.connections:
@@ -189,43 +166,31 @@ def _part_degrees(bg: BehavioralGraph) -> Dict[str, int]:
     return degrees
 
 
-# ---------------------------------------------------------------------------
-# Priority-stacked node classification
-# ---------------------------------------------------------------------------
-
 def _classify_node(node: PartNode, bg: BehavioralGraph) -> str:
-    """
-    Priority-stacked classification:
+    """Priority-stacked classification:
 
-    P1. Satisfy relationships  — requirement IDs with unambiguous domain
-        fragments (safe/comms/power) map directly to a class.  FUNC/PERF
-        requirements are skipped — any part can satisfy them.
-    P2. Keyword matching       — semantic intent expressed in usage + def names,
-        checked unconditionally BEFORE topology.  Ensures a well-named part
-        (e.g. "FlightController") is never mis-classified as "sensor" just
-        because syside missed some of its input ports.
-    P3. Port direction topology — structural role for anonymous/abbreviated
+    P1. Keyword matching       - intent from usage + def names, checked first so
+        "FlightController" is not filed as "sensor" by a port-direction quirk or
+        as "safety" by the SAFE requirements a controller satisfies (s0v8).
+    P2. Satisfy relationships  - requirement IDs with unambiguous domain
+        fragments (safe/comms/power) classify parts whose names carry no signal.
+        FUNC/PERF requirements are skipped; any part can satisfy them.
+    P3. Port direction topology - structural role for anonymous/abbreviated
         names that carry no keyword signal:
-          pure OUT  → "sensor"
-          pure IN   → "actuator"
-          mixed hub → "controller"
-    P4. "other"                — no topology, no keyword match.  Caller handles
-        via degree-based promotion in auto_detect_scenarios.
+          pure OUT  -> "sensor"
+          pure IN   -> "actuator"
+          mixed hub -> "controller"
+    P4. "other"                - no topology, no keyword match. The caller
+        promotes by degree in auto_detect_scenarios.
 
-    Rationale for keywords-before-topology:
-      Port directions can be incomplete (LLM may drop IN ports on a controller);
-      part names almost never misrepresent intent.  Topology is a strong signal
-      only when the name gives no information (abbreviated or random).
+    Keywords come before topology because port directions can be incomplete (an
+    LLM may drop IN ports on a controller) while names rarely misrepresent intent.
     """
-    # ── P1: satisfy relationships ────────────────────────────────────────────
-    for req_name in node.satisfied_reqs:
-        low = req_name.lower()
-        if any(k in low for k in _REQ_SAFETY_KW): return "safety"
-        if any(k in low for k in _REQ_COMMS_KW):  return "comms"
-        if any(k in low for k in _REQ_POWER_KW):  return "power"
-        # FUNC/PERF: fall through — any part type can satisfy these
-
-    # ── P2: keyword matching (all parts, all categories) ─────────────────────
+    # ── P1: keyword matching (all parts, all categories) ─────────────────────
+    # Name identity comes first. Satisfy-based classification ran before it, and
+    # a controller carrying a satisfy REQ_SAFE_* link was classified "safety",
+    # killing every controller-role scenario with MISSING_TARGET_ROLE. Part names
+    # rarely misrepresent intent; requirement allocation crosses roles.
     for name in (node.id, node.def_name):
         low = name.lower()
         if any(k in low for k in _SAFETY_KEYWORDS):    return "safety"
@@ -234,16 +199,21 @@ def _classify_node(node: PartNode, bg: BehavioralGraph) -> str:
         if any(k in low for k in _COMMS_KEYWORDS):     return "comms"
         if any(k in low for k in _POWER_KEYWORDS):     return "power"
         if any(k in low for k in _ACTUATOR_KEYWORDS):  return "actuator"
-        # Structure is checked LAST among keywords: only parts that match no
-        # active role and carry a structural name (airframe, chassis, …) are
-        # passive mechanical bodies.
+        # Structure is checked last among keywords: only parts with no active role
+        # and a structural name (airframe, chassis, ...) are passive bodies.
         if any(k in low for k in _STRUCTURE_KEYWORDS): return "structure"
 
+    for req_name in node.satisfied_reqs:
+        low = req_name.lower()
+        if any(k in low for k in _REQ_SAFETY_KW): return "safety"
+        if any(k in low for k in _REQ_COMMS_KW):  return "comms"
+        if any(k in low for k in _REQ_POWER_KW):  return "power"
+        # FUNC/PERF: fall through - any part type can satisfy these
+
     # ── P3: production-oriented classification (name carries no keyword) ──────
-    # A part's role is defined by what it PRODUCES.  Match the production
-    # lexicons against OUT (and inout) port names only — these name what the
-    # part emits.  IN-port names describe consumed signals (the other party's
-    # output) and must not classify this part, so they are excluded here.
+    # A part's role follows from what it produces, so the production lexicons
+    # match against out (and inout) port names only. In-port names describe
+    # consumed signals (the other party's output) and are excluded.
     part_ports = [bg.ports[pid] for pid in node.port_ids if pid in bg.ports]
     out_names = [
         p.port_name.lower() for p in part_ports
@@ -253,7 +223,6 @@ def _classify_node(node: PartNode, bg: BehavioralGraph) -> str:
         if any(tok in pn for pn in out_names for tok in lexicon):
             return role
 
-    # ── P3b: pure consumer of commands → actuator/effector ───────────────────
     in_names = [
         p.port_name.lower() for p in part_ports
         if p.direction in ("in", "inout") and p.port_name
@@ -262,42 +231,43 @@ def _classify_node(node: PartNode, bg: BehavioralGraph) -> str:
         return "actuator"
 
     # ── P4: conservative direction topology (no semantic signal at all) ──────
-    # Only pure sources / pure sinks get a definite role.  A part with mixed
-    # in+out ports but no production-semantic out-port name is NOT assumed to be
-    # a controller (that over-promotion inflated and distorted the scenario set
-    # — e.g. a power/platform part with `in cmd` + `out status`).  It becomes
-    # "other"; auto_detect_scenarios promotes the highest-degree "other" to
-    # controller only when no controller was found anywhere.
+    # Only pure sources / pure sinks get a definite role. A part with mixed
+    # in+out ports but no production-semantic out-port name becomes "other",
+    # since promoting it to controller inflated the scenario set (e.g. a power
+    # part with `in cmd` + `out status`). auto_detect_scenarios promotes the
+    # highest-degree "other" to controller only when no controller was found.
     has_out, has_in = _port_topology(node, bg)
     if node.port_ids:
-        if has_out and not has_in:  return "sensor"      # pure source
-        if has_in  and not has_out: return "actuator"    # pure sink
-        return "other"                                   # mixed but uncharacterised
+        if has_out and not has_in:  return "sensor"
+        if has_in  and not has_out: return "actuator"
+        return "other"
 
     return "other"
 
 
-# ---------------------------------------------------------------------------
-# Model-driven scenario generation
-# ---------------------------------------------------------------------------
-
 def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
-    """
-    Generate plausible scenarios from the PartNodes in *bg*.
+    """Generate scenarios from the PartNodes in *bg*.
 
-    Uses priority-stacked classification (satisfy → topology → keywords →
-    hub-fallback).  Parts that end up as "other" are added to a hub-fallback
-    pool; the highest-degree "other" part (most connections) is promoted to
-    a generic controller candidate so no part is silently ignored.
-
-    Isolated parts (no connect statements) are intentionally included so
-    that the validator catches them as failing scenarios.
+    Classification is priority-stacked (satisfy -> topology -> keywords ->
+    hub-fallback); "other" parts join a hub-fallback pool whose highest-degree
+    member becomes a generic controller candidate. Isolated parts (no connect
+    statements) are included so the validator catches them as failing scenarios.
     """
-    # ── Classify all parts ───────────────────────────────────────────────────
-    classified: Dict[str, List[str]] = {}
-    for pname, pnode in bg.parts.items():
-        cls = _classify_node(pnode, bg)
-        classified.setdefault(cls, []).append(pname)
+    classified = classify_parts_by_role(bg)
+
+    # A part whose definition is declared passive (`// PLAN-PASSIVE`) joins no
+    # scenario, including power-to-structure, because the planner recorded that
+    # the body exchanges nothing. Undeclared structural parts keep the
+    # conservative treatment below.
+    passive_ids = {
+        node.id for node in bg.parts.values()
+        if node.def_name in getattr(bg, "passive_defs", set())
+    }
+    if passive_ids:
+        classified = {
+            role: [pid for pid in ids if pid not in passive_ids]
+            for role, ids in classified.items()
+        }
 
     controllers = classified.get("controller", [])
     sensors     = classified.get("sensor", [])
@@ -306,24 +276,7 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
     power       = classified.get("power", [])
     actuators   = classified.get("actuator", [])
     structures  = classified.get("structure", [])
-    others      = classified.get("other", [])
 
-    # ── Hub-fallback: promote highest-degree "other" part to controller ───────
-    # Only fires when there are NO recognised controllers at all — prevents
-    # inflating an already-adequate controller list with mystery parts.
-    # "other" means: no ports (or direction=none) AND no keyword match.
-    # Among these, the most-connected part is the best controller proxy.
-    if others and not controllers:
-        degrees = _part_degrees(bg)
-        others_by_degree = sorted(others, key=lambda p: degrees.get(p, 0), reverse=True)
-        top_hub = others_by_degree[0]
-        if degrees.get(top_hub, 0) > 0:
-            # Only promote if it actually has connections (real hub behaviour).
-            # Truly isolated parts (degree 0) are not valid controller candidates.
-            controllers = [top_hub]
-            others = others_by_degree[1:]
-
-    # ── Scenario cross-products ──────────────────────────────────────────────
     scenarios: List[Scenario] = []
     seen: set = set()
 
@@ -340,58 +293,51 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
             tags=tags or [],
         ))
 
-    # Sensor → Controller
     for src in sensors:
         for tgt in controllers:
             _add(f"{src}_to_{tgt}",
                  f"Sensor data path: {src} → {tgt}",
                  src, tgt, tags=["nominal", "sensing"])
 
-    # Safety → Controller (critical path)
     for src in safety:
         for tgt in controllers:
             _add(f"emergency_{src}_to_{tgt}",
                  f"Emergency override: {src} → {tgt}",
                  src, tgt, tags=["safety", "emergency"])
 
-    # Power → Safety (battery monitoring)
     for src in power:
         for tgt in safety:
             _add(f"power_{src}_to_{tgt}",
                  f"Battery status path: {src} → {tgt}",
                  src, tgt, tags=["safety", "power"])
 
-    # Power → Controller
     for src in power:
         for tgt in controllers:
             _add(f"power_{src}_to_{tgt}",
                  f"Power path: {src} → {tgt}",
                  src, tgt, tags=["nominal", "power"])
 
-    # Comms → Controller (uplink)
     for src in comms:
         for tgt in controllers:
             _add(f"uplink_{src}_to_{tgt}",
                  f"Command uplink: {src} → {tgt}",
                  src, tgt, tags=["nominal", "comms"])
 
-    # Controller → Comms (telemetry downlink)
     for src in controllers:
         for tgt in comms:
             _add(f"telemetry_{src}_to_{tgt}",
                  f"Telemetry downlink: {src} → {tgt}",
                  src, tgt, tags=["nominal", "comms"])
 
-    # Controller → Actuator
     for src in controllers:
         for tgt in actuators:
             _add(f"control_{src}_to_{tgt}",
                  f"Control path: {src} → {tgt}",
                  src, tgt, tags=["nominal", "actuation"])
 
-    # Power → Structure (a structural body may house powered avionics).
-    # Structures participate ONLY here — never as telemetry/control/uplink
-    # endpoints — so a passive airframe cannot seed spurious signal scenarios.
+    # Power -> Structure (a structural body may house powered avionics).
+    # Structures participate only here, not as telemetry/control/uplink
+    # endpoints, so a passive airframe seeds no spurious signal scenarios.
     for src in power:
         for tgt in structures:
             _add(f"power_{src}_to_{tgt}",
@@ -399,16 +345,15 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
                  src, tgt, tags=["nominal", "power"])
 
     # ── Fallback: generic connectivity when all classification fails ──────────
-    # This fires only when the cross-products above yielded nothing — meaning
-    # every part ended up as "other" and the hub-promotion above either didn't
-    # fire or produced no pairings.  Using degree to pick the hub is better than
-    # random dict ordering, but these scenarios are labelled "unclassified" so
-    # the validator report makes clear they are degraded fallback paths, not
-    # intentional design scenarios.
-    if not scenarios and len(bg.parts) >= 2:
+    # Fires only when the cross-products above yielded nothing: every part ended
+    # up as "other" and hub-promotion produced no pairings. Degree picks the hub,
+    # and the scenarios are labelled "unclassified" so the validator report shows
+    # them as degraded fallback paths.
+    active_parts = [p for p in bg.parts if p not in passive_ids]
+    if not scenarios and len(active_parts) >= 2:
         degrees = _part_degrees(bg)
-        hub = max(bg.parts, key=lambda p: degrees.get(p, 0))
-        for other in bg.parts:
+        hub = max(active_parts, key=lambda p: degrees.get(p, 0))
+        for other in active_parts:
             if other == hub:
                 continue
             _add(f"connectivity_{other}_to_{hub}",
@@ -418,19 +363,34 @@ def auto_detect_scenarios(bg: BehavioralGraph) -> List[Scenario]:
     return scenarios
 
 
+def classify_parts_by_role(bg: BehavioralGraph) -> Dict[str, List[str]]:
+    """Return deterministic semantic-role assignments for one model graph.
+
+    Shared by adaptive internal scenarios and the fixed cross-configuration
+    post-hoc suite so both use one classification implementation.
+    """
+    classified: Dict[str, List[str]] = {}
+    for pname, pnode in bg.parts.items():
+        role = _classify_node(pnode, bg)
+        classified.setdefault(role, []).append(pname)
+    for names in classified.values():
+        names.sort()
+
+    others = classified.get("other", [])
+    if others and not classified.get("controller"):
+        degrees = _part_degrees(bg)
+        ranked = sorted(others, key=lambda p: (-degrees.get(p, 0), p))
+        top_hub = ranked[0]
+        if degrees.get(top_hub, 0) > 0:
+            classified["controller"] = [top_hub]
+            classified["other"] = ranked[1:]
+    return classified
+
+
 def select_scenarios(bg: BehavioralGraph,
                      predefined: Optional[List[Scenario]] = None
                      ) -> List[Scenario]:
-    """
-    Return the best scenario set for a given BehavioralGraph.
-
-    Strategy:
-      1. Filter *predefined* scenarios whose entry/target nodes exist in *bg*.
-         (Useful when predefined scenarios use exact PartUsage names.)
-      2. Always supplement with auto_detect_scenarios — it uses priority-stacked
-         classification so it adapts to any generated model.
-      3. Deduplicate by name (predefined take priority).
-    """
+    """Return the best scenario set for a given BehavioralGraph."""
     part_names = set(bg.parts.keys())
     seen_names: set = set()
     result: List[Scenario] = []

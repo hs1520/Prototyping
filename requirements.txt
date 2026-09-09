@@ -1,20 +1,22 @@
+# Runtime
 openai>=1.0.0
 requests>=2.31.0
-numpy>=1.24.0
-scipy>=1.10.0
-pydantic>=2.0.0
-tiktoken>=0.5.0
-faiss-cpu>=1.7.4
-sentence-transformers>=2.2.2
 networkx>=3.6
-matplotlib>=3.7.0
-pytest>=7.4.0
-pytest-cov>=4.1.0
 python-dotenv>=1.0.0
-rich>=13.0.0
 google-genai
 langsmith
 pinecone
-gh
 syside
-MAVProxy
+MAVProxy          # ArduPilot SITL ground station, launched as a subprocess
+
+# Test / dev tooling
+pytest>=7.4.0
+pytest-cov>=4.1.0
+ruff>=0.16
+
+# NOT pip dependencies (documented so they aren't "cleaned up" back in):
+# - The GitHub provider shells out to the `gh` CLI (brew install gh); the PyPI
+#   package named `gh` is unrelated and was listed here by mistake.
+# - numpy/scipy/pydantic/tiktoken/faiss-cpu/sentence-transformers/matplotlib/rich
+#   were removed 2026-08-21: zero imports anywhere in src/tests/examples/scripts/
+#   gazebo_poc. The physics/BO/calibration modules are deliberately pure-Python.

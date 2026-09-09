@@ -1,20 +1,13 @@
-"""
-state_extractor.py
-
-用 syside 原生 API 从 SysML v2 文本中提取状态机定义。
-不依赖我们自己的 Syside_AST_Parser，因为 model.py 目前不含 StateDefinition。
-
-提取内容：
-  - StateMachineDef  — 一个 state def 块
-  - StateNode        — 一个状态（含 entry action 名）
-  - TransitionDef    — 一条转移（含 guard 条件）
-  - GuardCondition   — guard 的结构化表示（支持数值比较 / 布尔 / 复合 AND/OR）
-"""
+"""state_extractor.py"""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+from ..utils.suppressed import record_suppressed
+from ..utils.sysml_text_utils import find_block_end, named_def_pattern
 
 try:
     import syside as _syside
@@ -25,13 +18,12 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Expression tree (Layer 1 — supports variable/arithmetic RHS in guards)
+# Expression tree (Layer 1 - supports variable/arithmetic RHS in guards)
 # ---------------------------------------------------------------------------
 #
-# A guard comparison's two sides are represented as expression trees so that
-# guards like `batteryCharge <= returnEnergyRequired` (variable RHS) or
-# `commLossTime > timeToHub + 300.0` (arithmetic RHS) are captured fully,
-# instead of being dropped when the RHS is not a bare literal.
+# Both sides of a guard comparison are expression trees, so guards like
+# `batteryCharge <= returnEnergyRequired` or `commLossTime > timeToHub + 300.0`
+# are captured instead of dropped when the RHS is not a bare literal.
 
 
 @dataclass
@@ -83,7 +75,7 @@ class VarRef(Expr):
 
 @dataclass
 class BinOp(Expr):
-    op: str            # '+' '-' '*' '/'
+    op: str
     left: Expr
     right: Expr
 
@@ -109,7 +101,6 @@ _ARITH_OPS = {"+", "-", "*", "/"}
 
 
 def _to_expr(node) -> Optional[Expr]:
-    """Convert a syside expression node into an Expr, or None if unsupported."""
     if node is None:
         return None
     tname = type(node).__name__
@@ -138,36 +129,19 @@ def _to_expr(node) -> Optional[Expr]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
 @dataclass
 class GuardCondition:
-    """
-    结构化的 guard 条件。
-
-    kind == 'comparison' : attribute operator threshold
-        e.g. batteryCharge < 15.0
-    kind == 'bool_true'  : attribute (boolean flag must be True)
-        e.g. sensorSelfTestFailed
-    kind == 'compound'   : compound_op over operands
-        e.g. channelAFailed and channelBFailed
-    kind == 'enum_eq'    : attribute == EnumType::Value  (Layer 2)
-        e.g. flightMode == DroneMode::SELF_TEST
-    """
-    kind: str                                         # 'comparison' | 'bool_true' | 'compound' | 'enum_eq'
-    attribute: str = ""                               # LHS variable name (comparison / bool_true / enum_eq)
-    operator: str = ""                                # '<' '<=' '>' '>=' (comparison only)
-    threshold: float = 0.0                            # effective RHS constant (comparison only)
-    compound_op: str = ""                             # 'and' | 'or' (compound only)
+    """结构化的 guard 条件。"""
+    kind: str
+    attribute: str = ""
+    operator: str = ""
+    threshold: float = 0.0
+    compound_op: str = ""
     operands: List["GuardCondition"] = field(default_factory=list)
-    # Layer 1: full expression trees for a comparison's two sides.
     lhs: Optional[Expr] = None
     rhs: Optional[Expr] = None
-    # Layer 2: enum equality fields
-    enum_type: str = ""                               # e.g. "DroneMode"
-    enum_value: str = ""                              # e.g. "SELF_TEST"
+    enum_type: str = ""
+    enum_value: str = ""
 
     def description(self) -> str:
         if self.kind == "comparison":
@@ -176,6 +150,8 @@ class GuardCondition:
             return f"{self.attribute} {self.operator} {self.threshold}"
         if self.kind == "bool_true":
             return f"{self.attribute} == true"
+        if self.kind == "bool_false":
+            return f"{self.attribute} == false"
         if self.kind == "enum_eq":
             return f"{self.attribute} == {self.enum_type}::{self.enum_value}"
         if self.kind == "compound":
@@ -185,7 +161,7 @@ class GuardCondition:
 
     def involved_attributes(self) -> List[str]:
         """Return all attribute names referenced by this guard (lhs + rhs)."""
-        if self.kind == "bool_true":
+        if self.kind in {"bool_true", "bool_false"}:
             return [self.attribute] if self.attribute else []
         if self.kind == "enum_eq":
             return [self.attribute] if self.attribute else []
@@ -197,32 +173,22 @@ class GuardCondition:
                 names += self.rhs.vars()
             if not names and self.attribute:
                 names = [self.attribute]
-            # de-dupe preserving order
-            seen: set = set()
-            return [n for n in names if not (n in seen or seen.add(n))]
+            return list(dict.fromkeys(names))
         attrs: List[str] = []
         for op in self.operands:
             attrs.extend(op.involved_attributes())
         return attrs
 
     def resolve_threshold(self, defaults: Dict[str, Any]) -> Optional[float]:
-        """
-        Partial-evaluate the RHS against *defaults* (the owner part's initial
-        attribute values) to get an effective numeric threshold.
-
-        Returns the constant, or None when the RHS cannot be reduced to a
-        number (e.g. references a variable with no known default — genuinely
-        dynamic, deferred to Layer 2/3).
+        """Partial-evaluate the RHS against *defaults* (the owner part's initial values)
+        to get an effective numeric threshold.
         """
         if self.rhs is None:
             return None
         return self.rhs.eval(defaults)
 
     def eval(self, env: Dict[str, Any]) -> bool:
-        """
-        Evaluate the full guard against a complete variable environment.
-        Used by the executor when lhs/rhs expression trees are available.
-        """
+        """Evaluate the full guard against a complete variable environment."""
         if self.kind == "comparison" and self.lhs is not None and self.rhs is not None:
             a = self.lhs.eval(env)
             b = self.rhs.eval(env)
@@ -238,8 +204,9 @@ class GuardCondition:
             return False
         if self.kind == "bool_true":
             return bool(env.get(self.attribute, False))
+        if self.kind == "bool_false":
+            return not bool(env.get(self.attribute, False))
         if self.kind == "enum_eq":
-            # Compare current string value of the mode attribute against the target enum value.
             current = env.get(self.attribute)
             if current is None:
                 return False
@@ -255,20 +222,21 @@ class GuardCondition:
 @dataclass
 class StateNode:
     name: str
-    entry_action: Optional[str] = None          # name of the entry action, or None
+    entry_action: Optional[str] = None
+    entry_action_def: Optional[str] = None
+    do_action: Optional[str] = None
+    do_action_def: Optional[str] = None
     sends: List[tuple] = field(default_factory=list)
-    # [(cmd_type_name, port_name), ...]
-    # populated when the entry action body contains `send X() to port;`
 
 
 @dataclass
 class TransitionDef:
     name: Optional[str]
-    source: Optional[str]          # source state name; None → initial transition
-    target: Optional[str]          # target state name
+    source: Optional[str]
+    target: Optional[str]
     guards: List[GuardCondition] = field(default_factory=list)
     is_initial: bool = False
-    accept_trigger: Optional[str] = None   # accept action type name, e.g. "TakeoffCmd"
+    accept_trigger: Optional[str] = None
 
 
 @dataclass
@@ -278,7 +246,6 @@ class StateMachineDef:
     states: List[StateNode] = field(default_factory=list)
     transitions: List[TransitionDef] = field(default_factory=list)
     initial_state: Optional[str] = None
-    # Initial attribute values extracted from the owner part's attributes
     initial_values: Dict[str, Any] = field(default_factory=dict)
 
     def fault_transitions(self) -> List[TransitionDef]:
@@ -297,19 +264,38 @@ class StateMachineDef:
                 return s.entry_action
         return None
 
+    def do_action_for_state(self, state_name: str) -> Optional[str]:
+        for state in self.states:
+            if state.name == state_name:
+                return state.do_action
+        return None
+
+    def response_action_for_state(self, state_name: str) -> Optional[str]:
+        """Return the executable entry action, or otherwise the do action."""
+        return (
+            self.entry_action_for_state(state_name)
+            or self.do_action_for_state(state_name)
+        )
+
+    def response_action_definition_for_state(
+        self, state_name: str,
+    ) -> Optional[str]:
+        """Return the action definition invoked by a state's response usage."""
+        for state in self.states:
+            if state.name != state_name:
+                continue
+            return state.entry_action_def or state.do_action_def
+        return None
+
     def all_sends(self) -> List[tuple]:
         """Return [(state_name, cmd_type, port_name)] for every fault-state send."""
         out = []
         for s in self.states:
-            if s.entry_action:
+            if s.entry_action or s.do_action:
                 for cmd, port in s.sends:
                     out.append((s.name, cmd, port))
         return out
 
-
-# ---------------------------------------------------------------------------
-# Accept trigger extraction
-# ---------------------------------------------------------------------------
 
 _STD_NAMESPACES = frozenset({
     "Actions::", "Occurrences::", "Base::",
@@ -318,17 +304,6 @@ _STD_NAMESPACES = frozenset({
 
 
 def _extract_accept_trigger(tr) -> Optional[str]:
-    """
-    Extract the accepted command/action type name from a syside
-    TransitionUsage.  Returns None when no accept trigger is present.
-
-    Verified API path (syside):
-      tr.trigger_actions
-        → AcceptActionUsage.payload_parameter
-          → .definitions  (LazyIterator of type defs)
-            → first ActionDefinition not in a standard-library namespace
-              → .name  ==  user-defined command type (e.g. "TakeoffCmd")
-    """
     actions = getattr(tr, "trigger_actions", None)
     if not actions:
         return None
@@ -344,33 +319,23 @@ def _extract_accept_trigger(tr) -> Optional[str]:
                 if type(defn).__name__ != "ActionDefinition":
                     continue
                 qname = str(getattr(defn, "qualified_name", "") or "")
-                # Skip standard-library entries (Occurrences::Occurrence, etc.)
                 if any(qname.startswith(ns) for ns in _STD_NAMESPACES):
                     continue
                 name = getattr(defn, "name", None)
                 if name:
                     return str(name)
-        except Exception:
-            pass
+        except Exception as exc:
+            record_suppressed("simulation.state_extractor.action_def_lookup", exc)
 
     return None
 
 
-# ---------------------------------------------------------------------------
-# Guard extraction (recursive)
-# ---------------------------------------------------------------------------
-
 def _extract_guard(expr) -> Optional[GuardCondition]:
-    """
-    Recursively convert a syside expression node into a GuardCondition.
-    Returns None if the expression type is unrecognised.
-    """
     if expr is None:
         return None
 
     tname = type(expr).__name__
 
-    # ── Boolean feature reference: e.g. `sensorSelfTestFailed` ───────────────
     if tname == "FeatureReferenceExpression":
         ref = expr.referent
         attr = ref.name if ref else None
@@ -378,12 +343,10 @@ def _extract_guard(expr) -> Optional[GuardCondition]:
             return GuardCondition(kind="bool_true", attribute=attr)
         return None
 
-    # ── Operator expression: numeric comparison or compound boolean ───────────
     if tname == "OperatorExpression":
         op = str(expr.operator).strip()
         args = list(expr.arguments)
 
-        # Compound AND / OR
         _AND_OPS = {"and", "&", "&&"}
         _OR_OPS  = {"or",  "|", "||"}
         if op in _AND_OPS or op in _OR_OPS:
@@ -399,19 +362,33 @@ def _extract_guard(expr) -> Optional[GuardCondition]:
                     )
             return None
 
-        # Numeric comparison: <  <=  >  >=  ==
+        if op == "not" and len(args) == 1:
+            operand = args[0]
+            if type(operand).__name__ == "FeatureReferenceExpression":
+                ref = operand.referent
+                attr = ref.name if ref else None
+                if attr:
+                    return GuardCondition(kind="bool_false", attribute=attr)
+            return None
+
         if op in ("<", "<=", ">", ">=", "==", "!=") and len(args) == 2:
             lhs, rhs = args[0], args[1]
 
-            # ── Boolean literal RHS: `attr == true` / `attr == false` ──────────
             if type(rhs).__name__ == "LiteralBoolean":
                 attr_name = None
                 if type(lhs).__name__ == "FeatureReferenceExpression":
                     ref = lhs.referent
                     attr_name = ref.name if ref else None
-                if attr_name and op == "==" and bool(rhs.value):
-                    return GuardCondition(kind="bool_true", attribute=attr_name)
-                # `== false` / `!= true` — skip (handled as no-fault by Layer1)
+                if attr_name and op == "==":
+                    return GuardCondition(
+                        kind="bool_true" if bool(rhs.value) else "bool_false",
+                        attribute=attr_name,
+                    )
+                if attr_name and op == "!=":
+                    return GuardCondition(
+                        kind="bool_false" if bool(rhs.value) else "bool_true",
+                        attribute=attr_name,
+                    )
                 return None
 
             # ── Enum equality: `attr == EnumType::Value`  (Layer 2) ─────────────
@@ -436,18 +413,16 @@ def _extract_guard(expr) -> Optional[GuardCondition]:
                             enum_value=rhs_value,
                         )
 
-            # ── General comparison: build expression trees for both sides ──────
             lhs_expr = _to_expr(lhs)
             rhs_expr = _to_expr(rhs)
             if lhs_expr is None or rhs_expr is None:
                 return None
 
-            # Back-compat: when LHS is a bare variable, expose it as `attribute`
-            # so the existing single-variable driver keeps working.  `threshold`
-            # is resolved later (after initial_values are known) — see
-            # _resolve_guard_thresholds().
+            # Back-compat: when LHS is a bare variable, expose it as `attribute` so the
+            # single-variable driver keeps working. `threshold` is resolved later, once
+            # initial_values are known - see _resolve_guard_thresholds().
             lhs_var = lhs_expr.name if isinstance(lhs_expr, VarRef) else ""
-            init_threshold = rhs_expr.eval({})  # resolves when RHS is constant
+            init_threshold = rhs_expr.eval({})
             return GuardCondition(
                 kind="comparison",
                 attribute=lhs_var,
@@ -460,15 +435,34 @@ def _extract_guard(expr) -> Optional[GuardCondition]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Initial attribute value extraction
-# ---------------------------------------------------------------------------
+def _numeric_default_value(expression) -> Optional[float]:
+    if expression is None:
+        return None
+    expression_type = type(expression).__name__
+    if expression_type in (
+        "LiteralRational",
+        "LiteralInteger",
+        "LiteralReal",
+    ):
+        try:
+            return float(expression.value)
+        except (TypeError, ValueError):
+            return None
+    if expression_type == "OperatorExpression":
+        operator = getattr(expression, "operator", None)
+        operator_name = str(getattr(operator, "name", "") or "")
+        operator_value = str(getattr(operator, "value", "") or "")
+        if operator_name == "Quantity" or operator_value == "[":
+            try:
+                arguments = list(expression.arguments)
+            except Exception:
+                return None
+            if arguments:
+                return _numeric_default_value(arguments[0])
+    return None
+
 
 def _extract_part_attrs(part_def) -> Dict[str, Any]:
-    """
-    Extract initial attribute values from a syside PartDefinition node.
-    Returns a dict of {attr_name: numeric_or_bool_value}.
-    """
     result: Dict[str, Any] = {}
     try:
         for attr in part_def.owned_attributes:
@@ -479,49 +473,45 @@ def _extract_part_attrs(part_def) -> Dict[str, Any]:
             if fve is None:
                 continue
             fve_type = type(fve).__name__
-            if fve_type in ("LiteralRational", "LiteralInteger", "LiteralReal"):
-                try:
-                    result[name] = float(fve.value)
-                except (TypeError, ValueError):
-                    pass
+            numeric = _numeric_default_value(fve)
+            if numeric is not None:
+                result[name] = numeric
             elif fve_type == "LiteralBoolean":
                 result[name] = bool(fve.value)
             elif fve_type == "FeatureReferenceExpression":
-                # Enum-typed attribute: initial value is an EnumerationUsage
-                # e.g. `attribute flightMode : DroneMode = DroneMode::POWER_ON`
                 ref = getattr(fve, "referent", None)
                 if ref is not None and type(ref).__name__ == "EnumerationUsage":
-                    result[name] = ref.name  # store as string, e.g. "POWER_ON"
-    except Exception:
-        pass
+                    result[name] = ref.name
+    except Exception as exc:
+        record_suppressed("simulation.state_extractor.initial_values", exc)
     return result
 
 
-# ---------------------------------------------------------------------------
-# SendActionUsage extraction helpers
-# ---------------------------------------------------------------------------
+# Sentinel separating "candidate attribute absent in this syside build"
+# (expected probing, silent) from "attribute present but access failed"
+# (recorded via record_suppressed).
+_CANDIDATE_ABSENT = object()
+
 
 def _extract_send_payload_name(sa) -> Optional[str]:
-    """
-    从 SendActionUsage.payload_argument 提取命令类型名。
-    payload_argument 是 InvocationExpression，类型引用指向 ActionDefinition。
-    syside 上 Usage.types / action_definitions / definitions 都可能返回类型列表，
-    全部尝试，取第一个非空 name。
-    """
     try:
         pa = sa.payload_argument
         if pa is None:
             return None
-        # 按优先级尝试不同属性名
+        # 按优先级尝试不同属性名。候选名在当前 syside 版本里缺席是预期探测结果，
+        # 记录它会把 suppressed 通道刷出数千条噪声（ablation pilot: 324 条/run）。
+        # 只有属性存在但访问失败才记录。
         for attr in ("action_definitions", "definitions", "types"):
+            source = getattr(pa, attr, _CANDIDATE_ABSENT)
+            if source is _CANDIDATE_ABSENT:
+                continue
             try:
-                for defn in getattr(pa, attr):
+                for defn in source:
                     name = getattr(defn, "name", None)
                     if name:
                         return str(name)
-            except Exception:
-                pass
-        # FeatureReferenceExpression → referent.name
+            except Exception as exc:
+                record_suppressed("simulation.state_extractor.performed_action_name", exc)
         ref = getattr(pa, "referent", None)
         if ref:
             name = getattr(ref, "name", None)
@@ -533,15 +523,10 @@ def _extract_send_payload_name(sa) -> Optional[str]:
 
 
 def _extract_send_receiver_name(sa) -> Optional[str]:
-    """
-    从 SendActionUsage.receiver_argument 提取目标端口名。
-    receiver_argument 是 FeatureReferenceExpression，referent 是端口 Usage。
-    """
     try:
         ra = sa.receiver_argument
         if ra is None:
             return None
-        # FeatureReferenceExpression → referent → name
         ref = getattr(ra, "referent", None)
         if ref:
             name = getattr(ref, "name", None)
@@ -553,64 +538,70 @@ def _extract_send_receiver_name(sa) -> Optional[str]:
 
 
 def _iter_action_body(action_usage) -> List:
-    """
-    从一个 ActionUsage 的类型定义体里提取所有直接 owned action 节点。
-
-    syside 里 ActionDefinition 的 body 成员可能挂在以下属性之一：
-      nested_actions  — 标准 SysML API 属性
-      owned_actions   — 实现细节别名
-      owned_members   — 最宽泛的 fallback（过滤出 ActionUsage 子类）
-
-    对每个候选属性都尝试，合并去重后返回。
-    """
     if action_usage is None:
         return []
 
-    # 先拿到 ActionDefinition（typed by this usage）
+    # 先拿到 ActionDefinition（typed by this usage）。候选属性名缺席（如当前
+    # syside 没有 owned_actions）是预期探测结果，静默跳过；只有属性存在但迭代
+    # 失败才进 suppressed（否则会刷出 5265 条/run 的噪声）。
     defs: List = []
     for attr in ("action_definitions", "definitions", "types"):
+        source = getattr(action_usage, attr, _CANDIDATE_ABSENT)
+        if source is _CANDIDATE_ABSENT:
+            continue
         try:
-            defs = [d for d in getattr(action_usage, attr)]
+            defs = [d for d in source]
             if defs:
                 break
-        except Exception:
-            pass
+        except Exception as exc:
+            record_suppressed("simulation.state_extractor.action_defs_fetch", exc)
 
     nodes: List = []
     seen_ids: set = set()
 
     for defn in defs:
         for attr in ("nested_actions", "owned_actions", "owned_members"):
+            source = getattr(defn, attr, _CANDIDATE_ABSENT)
+            if source is _CANDIDATE_ABSENT:
+                continue
             try:
-                for node in getattr(defn, attr):
+                for node in source:
                     nid = id(node)
                     if nid not in seen_ids:
                         seen_ids.add(nid)
                         nodes.append(node)
-            except Exception:
-                pass
+            except Exception as exc:
+                record_suppressed("simulation.state_extractor.action_nodes_fetch", exc)
 
     return nodes
 
 
-def _extract_send_usages(entry_action_usage) -> List[tuple]:
-    """
-    从一个 entry action usage 的定义体里找所有 SendActionUsage 节点。
-    返回 [(cmd_type_name, port_name), ...]。
+def _extract_action_definition_name(action_usage) -> Optional[str]:
+    """Return the user action definition invoked by an action usage.
 
-    访问路径:
-      entry_action_usage  (ActionUsage "onFault : initiateBatteryRtb")
-        → action_definitions / definitions / types
-          → ActionDefinition "initiateBatteryRtb"
-            → nested_actions / owned_actions / owned_members
-              → SendActionUsage  (duck-typed: has payload_argument + receiver_argument)
+    SysML separates the usage label (``entry action updatePlan``) from its type
+    (``: reviseWaypointSequence``); both are kept, the label for traces and the
+    definition for response semantics.
     """
+    if action_usage is None:
+        return None
+    for attr in ("action_definitions", "definitions", "types"):
+        try:
+            for defn in getattr(action_usage, attr):
+                name = getattr(defn, "name", None)
+                if name:
+                    return str(name)
+        except Exception as exc:
+            record_suppressed("simulation.state_extractor.action_def_name", exc)
+    return None
+
+
+def _extract_send_usages(entry_action_usage) -> List[tuple]:
     result: List[tuple] = []
     if entry_action_usage is None:
         return result
 
     for node in _iter_action_body(entry_action_usage):
-        # duck-type check: SendActionUsage must have these two attributes
         if not (hasattr(node, "payload_argument") and hasattr(node, "receiver_argument")):
             continue
         # 也接受 type name 匹配（防止 hasattr 在 proxy 上误报）
@@ -628,17 +619,8 @@ def _extract_send_usages(entry_action_usage) -> List[tuple]:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Main extraction entry point
-# ---------------------------------------------------------------------------
-
 def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
-    """
-    Parse *sysml_text* with the syside native API and return all
-    StateMachineDef objects found in the model.
-
-    Returns an empty list if syside is unavailable or parsing fails.
-    """
+    """Parse *sysml_text* with the syside native API and return all StateMachineDefs."""
     if not _SYSIDE_OK:
         return []
 
@@ -650,8 +632,20 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
     result: List[StateMachineDef] = []
 
     for sd in model.elements(_syside.StateDefinition):
+        state_source = sysml_text
+        state_match = named_def_pattern("state", str(sd.name)).search(sysml_text)
+        if state_match is not None:
+            state_open = state_match.end() - 1
+            state_close = find_block_end(sysml_text, state_open)
+            if state_close != -1:
+                state_source = sysml_text[
+                    state_match.start():state_close + 1
+                ]
         owner = sd.owner
-        owner_name: str = owner.name if owner else "__unknown__"
+        # A parse error upstream can reparent a state def under an unnamed
+        # expression node, so an owner may exist with no name; fall back rather
+        # than lose every scenario in the run.
+        owner_name: str = (owner.name if owner else None) or "__unknown__"
 
         sm = StateMachineDef(
             name=sd.name,
@@ -659,17 +653,31 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
             initial_values=_extract_part_attrs(owner) if owner else {},
         )
 
-        # ── States ────────────────────────────────────────────────────────────
         for st in sd.owned_states:
             entry_name: Optional[str] = None
+            entry_def_name: Optional[str] = None
+            do_name: Optional[str] = None
+            do_def_name: Optional[str] = None
             sends: List[tuple] = []
             ea = st.entry_action
             if ea:
                 entry_name = ea.name
+                entry_def_name = _extract_action_definition_name(ea)
                 sends = _extract_send_usages(ea)
-            sm.states.append(StateNode(name=st.name, entry_action=entry_name, sends=sends))
+            da = st.do_action
+            if da:
+                do_name = da.name
+                do_def_name = _extract_action_definition_name(da)
+                sends.extend(_extract_send_usages(da))
+            sm.states.append(StateNode(
+                name=st.name,
+                entry_action=entry_name,
+                entry_action_def=entry_def_name,
+                do_action=do_name,
+                do_action_def=do_def_name,
+                sends=sends,
+            ))
 
-        # ── Transitions ───────────────────────────────────────────────────────
         for tr in sd.owned_transitions:
             src  = tr.source
             tgt  = tr.target
@@ -685,19 +693,31 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
                     guards.append(g)
 
             accept_trigger = _extract_accept_trigger(tr)
-            # Text fallback: a standalone parse without the standard library
-            # cannot resolve the accepted action def, so _extract_accept_trigger
-            # returns None for every accept transition — collapsing an
-            # event-driven mode machine into "no accepts" and misclassifying it
-            # as a monitor (→ false "No fault transitions found").  Guards survive
-            # the degraded parse (local refs + literals); accepts do not.  Recover
-            # the trigger name from the source text, keyed on the transition name.
-            if accept_trigger is None and tr.name:
+            # Text fallback: a standalone parse without the standard library cannot
+            # resolve the accepted action def, so _extract_accept_trigger returns None
+            # for every accept transition and an event-driven mode machine collapses
+            # into a monitor. Guards survive the degraded parse, accepts do not, so
+            # recover the trigger name from the source text keyed on the transition name.
+            if accept_trigger is None:
                 import re as _re
-                _m = _re.search(
-                    r"\btransition\s+" + _re.escape(tr.name)
-                    + r"\b[^;{}]*?\baccept\s+(\w+)", sysml_text
-                )
+                if tr.name:
+                    _pattern = (
+                        r"\btransition\s+" + _re.escape(tr.name)
+                        + r"\b[^;{}]*?\baccept\s+(\w+)"
+                    )
+                else:
+                    # The transition name is optional in SysML v2, so an unnamed
+                    # transition is keyed on its source and target states instead
+                    # and does not lose its trigger.
+                    _pattern = (
+                        r"\btransition\b\s+first\s+"
+                        + _re.escape(src_name or "")
+                        + r"\b[^;{}]*?\baccept\s+(\w+)"
+                        + r"[^;{}]*?\bthen\s+"
+                        + _re.escape(tgt_name or "")
+                        + r"\s*;"
+                    )
+                _m = _re.search(_pattern, state_source)
                 if _m:
                     accept_trigger = _m.group(1)
 
@@ -714,11 +734,17 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
             if is_initial and tgt_name:
                 sm.initial_state = tgt_name
 
-        # ── Resolve effective thresholds now that initial_values are known ──
-        # A comparison whose RHS references an attribute (e.g.
-        # `batteryCharge <= returnEnergyRequired`) or contains arithmetic
-        # (`timeToHub + 300.0`) gets its `threshold` reduced to a constant
-        # using the owner part's default attribute values.
+        # Syside exposes `transition initial then X;` as an owned transition,
+        # but the bounded A/G spelling `entry; then X;` is an entry edge rather
+        # than a TransitionUsage. Preserve the same initial-state semantics.
+        if sm.initial_state is None:
+            entry_initial = re.search(
+                r"\bentry\s*;\s*then\s+([A-Za-z_]\w*)\s*;",
+                state_source,
+            )
+            if entry_initial is not None:
+                sm.initial_state = entry_initial.group(1)
+
         _resolve_guard_thresholds(sm)
 
         result.append(sm)
@@ -727,13 +753,6 @@ def extract_state_machines(sysml_text: str) -> List[StateMachineDef]:
 
 
 def _resolve_guard_thresholds(sm: StateMachineDef) -> None:
-    """
-    Walk every comparison guard and set `threshold` to the RHS partially
-    evaluated against the owner part's initial attribute values.
-
-    Leaves the original `threshold` (0.0 / literal) untouched when the RHS
-    cannot be reduced to a number (genuinely dynamic — deferred to Layer 2/3).
-    """
     def _walk(g: GuardCondition) -> None:
         if g.kind == "comparison":
             resolved = g.resolve_threshold(sm.initial_values)

@@ -1,0 +1,579 @@
+"""Real component catalog for bottom-up realization.
+
+Every value in DEFAULT_CATALOG traces to a manufacturer page via source_url
+and retrieved. Tests use synthetic catalogs rather than relying on catalog
+coverage.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import List, Tuple
+
+
+@dataclass(frozen=True)
+class MotorPropPoint:
+    throttle: float
+    thrust_g: float
+    current_a: float
+    power_w: float
+
+
+@dataclass(frozen=True)
+class MotorPropCombo:
+    name: str
+    source_url: str
+    retrieved: str
+    voltage_v: float
+    cells: int
+    motor_mass_g: float
+    prop_mass_g: float
+    prop_diameter_in: float
+    curve: Tuple[MotorPropPoint, ...]
+    price_usd: float | None = None
+    prop_source_url: str = ""
+
+    def max_thrust_g(self) -> float:
+        return max(p.thrust_g for p in self.curve)
+
+    def interp_at_thrust(self, thrust_g: float) -> Tuple[float, float]:
+        """Return (current_a, power_w) at per-motor thrust using linear interpolation."""
+        pts: List[MotorPropPoint] = sorted(self.curve, key=lambda p: p.thrust_g)
+        if thrust_g <= pts[0].thrust_g:
+            # Below the lowest published bench row, clamp rather than extrapolate:
+            # manufacturers publish no data there, so hover current for light builds is
+            # overestimated and endurance stays conservative.
+            return pts[0].current_a, pts[0].power_w
+        if thrust_g > pts[-1].thrust_g:
+            raise ValueError(
+                f"required {thrust_g:.0f} g/motor exceeds {self.name} max "
+                f"{pts[-1].thrust_g:.0f} g"
+            )
+        for a, b in zip(pts, pts[1:]):
+            if a.thrust_g <= thrust_g <= b.thrust_g:
+                f = (thrust_g - a.thrust_g) / (b.thrust_g - a.thrust_g)
+                return (
+                    a.current_a + f * (b.current_a - a.current_a),
+                    a.power_w + f * (b.power_w - a.power_w),
+                )
+        return pts[-1].current_a, pts[-1].power_w
+
+    def throttle_at_thrust(self, thrust_g: float) -> float:
+        """Return throttle fraction at per-motor thrust using linear interpolation."""
+        pts: List[MotorPropPoint] = sorted(self.curve, key=lambda p: p.thrust_g)
+        if thrust_g <= pts[0].thrust_g:
+            return pts[0].throttle
+        if thrust_g >= pts[-1].thrust_g:
+            return pts[-1].throttle
+        for a, b in zip(pts, pts[1:]):
+            if a.thrust_g <= thrust_g <= b.thrust_g:
+                f = (thrust_g - a.thrust_g) / (b.thrust_g - a.thrust_g)
+                return a.throttle + f * (b.throttle - a.throttle)
+        return pts[-1].throttle
+
+
+@dataclass(frozen=True)
+class BatteryPack:
+    name: str
+    source_url: str
+    retrieved: str
+    capacity_mah: float
+    cells: int
+    mass_g: float
+    c_rating: float
+    price_usd: float | None = None
+    # Pack chemistry matters even at the same series-cell count: LiPo is normally
+    # 3.7V/cell while the high-energy Li-ion packs below are specified at
+    # 3.6V/cell. None keeps the legacy cells*3.7V convention for entries whose
+    # page gives only the S count.
+    nominal_voltage_v: float | None = None
+
+    def operating_voltage_v(self) -> float:
+        return self.nominal_voltage_v or self.cells * 3.7
+
+
+@dataclass(frozen=True)
+class Frame:
+    name: str
+    source_url: str
+    retrieved: str
+    mass_g: float
+    arms: int
+    max_prop_in: float
+    price_usd: float | None = None
+
+
+@dataclass(frozen=True)
+class IntegrationBundle:
+    """Explicit non-payload mass carried by every flyable realization.
+
+    Separate from ``equipment_mass_kg``, which is mission equipment selected by a
+    variant: this bundle is the power electronics and airframe integration
+    hardware the baseline vehicle needs.
+    """
+
+    name: str
+    source_url: str
+    retrieved: str
+    mass_g: float
+    components: Tuple[str, ...]
+    compatible_rotor_counts: Tuple[int, ...] = ()
+    price_usd: float | None = None
+
+
+@dataclass(frozen=True)
+class ComponentCatalog:
+    combos: Tuple[MotorPropCombo, ...]
+    packs: Tuple[BatteryPack, ...]
+    frames: Tuple[Frame, ...]
+    integration_bundles: Tuple[IntegrationBundle, ...] = ()
+
+
+NO_INTEGRATION_BUNDLE = IntegrationBundle(
+    name="No integration allowance (synthetic/legacy only)",
+    source_url="allowance defined in this module, not a manufacturer part",
+    retrieved="2026-07-14",
+    mass_g=0.0,
+    components=(),
+    price_usd=0.0,
+)
+
+# Conservative system-level mass budget, not a vendor part. The allocation and
+# its status as an engineering assumption are in the cited design section; a
+# detailed BOM can replace it component by component without changing the
+# realization arithmetic.
+MULTIROTOR_INTEGRATION_BUDGET_500G = IntegrationBundle(
+    name="Multirotor power-electronics and integration budget (500g)",
+    source_url="allowance defined in this module, not a manufacturer part",
+    retrieved="2026-07-14",
+    mass_g=500.0,
+    components=(
+        "six ESCs",
+        "power distribution and current sensing",
+        "flight controller, GPS and telemetry",
+        "power/signal harnesses and connectors",
+        "battery mount, landing gear and integration fasteners",
+    ),
+    compatible_rotor_counts=(6,),
+)
+
+MULTIROTOR_INTEGRATION_BUDGET_400G = IntegrationBundle(
+    name="Multirotor power-electronics and integration budget (400g quad)",
+    source_url="allowance defined in this module, not a manufacturer part",
+    retrieved="2026-07-14",
+    mass_g=400.0,
+    components=(
+        "four ESCs",
+        "power distribution and current sensing",
+        "flight controller, GPS and telemetry",
+        "power/signal harnesses and connectors",
+        "battery mount, landing gear and integration fasteners",
+    ),
+    compatible_rotor_counts=(4,),
+)
+
+MULTIROTOR_INTEGRATION_BUDGET_600G = IntegrationBundle(
+    name="Multirotor power-electronics and integration budget (600g octo)",
+    source_url="allowance defined in this module, not a manufacturer part",
+    retrieved="2026-07-14",
+    mass_g=600.0,
+    components=(
+        "eight ESCs",
+        "power distribution and current sensing",
+        "flight controller, GPS and telemetry",
+        "power/signal harnesses and connectors",
+        "battery mount, landing gear and integration fasteners",
+    ),
+    compatible_rotor_counts=(8,),
+)
+
+
+TMOTOR_MN5008_URL = "https://store.tmotor.com/product/mn5008-kv340-motor-antigravity-type.html"
+TMOTOR_P18_URL = "https://store.tmotor.com/product/polish-carbon-fiber-18x6_1-prop.html"
+
+
+MN5008_KV340_18x61 = MotorPropCombo(
+    name="T-Motor MN5008 KV340 + P18x6.1 (6S)",
+    source_url=TMOTOR_MN5008_URL,
+    prop_source_url=TMOTOR_P18_URL,
+    retrieved="2026-07-03",
+    voltage_v=22.2,
+    cells=6,
+    motor_mass_g=135.0,
+    prop_mass_g=31.5,
+    prop_diameter_in=18.0,
+    price_usd=89.99 + 82.90 / 2.0,
+    curve=(
+        MotorPropPoint(0.40, 996.0, 3.76, 88.0),
+        MotorPropPoint(0.45, 1238.0, 5.12, 120.0),
+        MotorPropPoint(0.50, 1541.0, 6.93, 162.0),
+        MotorPropPoint(0.55, 1822.0, 8.95, 208.0),
+        MotorPropPoint(0.60, 2120.0, 11.12, 258.0),
+        MotorPropPoint(0.65, 2394.0, 13.46, 311.0),
+        MotorPropPoint(0.75, 2966.0, 18.83, 432.0),
+        MotorPropPoint(1.00, 4215.0, 33.50, 754.0),
+    ),
+)
+
+
+TMOTOR_MN4006_URL = "https://store.tmotor.com/product/mn4006-kv380-motor-antigravity-type.html"
+TMOTOR_P16_URL = "https://store.tmotor.com/product/polish-carbon-fiber-16x5_4-prop.html"
+
+# T-Motor Antigravity MN4006 KV380 + P16x5.4 CF, bench table at 24V (6S).
+# Manufacturer lines used (retrieved 2026-07-03):
+# - MN4006 page: bench rows below (24V, 16x5.4 CF prop); motor 68g incl cable.
+# - P16x5.4 page: single-blade integrated propeller weight 25+/-1.5g.
+# price_usd=None: the store price ($149.90) is ambiguous between single motor
+# and 2PCS/SET across T-Motor pages - omitted rather than guessed (§7 rule).
+MN4006_KV380_16x54 = MotorPropCombo(
+    name="T-Motor MN4006 KV380 + P16x5.4 (6S)",
+    source_url=TMOTOR_MN4006_URL,
+    prop_source_url=TMOTOR_P16_URL,
+    retrieved="2026-07-03",
+    voltage_v=24.0,
+    cells=6,
+    motor_mass_g=68.0,
+    prop_mass_g=25.0,
+    prop_diameter_in=16.0,
+    price_usd=None,
+    curve=(
+        MotorPropPoint(0.50, 928.0, 3.70, 89.0),
+        MotorPropPoint(0.55, 1096.0, 4.80, 115.0),
+        MotorPropPoint(0.60, 1258.0, 5.90, 142.0),
+        MotorPropPoint(0.65, 1427.0, 7.20, 173.0),
+        MotorPropPoint(0.75, 1740.0, 10.00, 240.0),
+        MotorPropPoint(0.85, 1970.0, 12.90, 310.0),
+        MotorPropPoint(1.00, 2309.0, 17.50, 420.0),
+    ),
+)
+
+
+TMOTOR_MN3508_URL = "https://store.tmotor.com/product/mn3508-motor-navigator-type.html"
+TMOTOR_P15_URL = "https://store.tmotor.com/product/polish-carbon-fiber-15x5-prop.html"
+
+# T-Motor Navigator MN3508 KV380 + P15x5 CF. Manufacturer lines used
+# (retrieved 2026-07-03; MN3508 Test Data table verified row by row against
+# store.tmotor.com, which publishes 15x5CF bench curves at both 14.8V (4S)
+# and 22.2V (6S), so neither combo below is interpolated):
+# - MN3508 page: KV380 motor 103g incl cable; 14.8V + 22.2V 15x5CF bench rows.
+# - P15x5 page: model 15x5; single-blade integrated propeller 21+/-1.5g.
+# price_usd = motor listing ($69.90) + half the 2PCS/PAIR P15x5 ($55.90/2).
+MN3508_KV380_15x5_4S = MotorPropCombo(
+    name="T-Motor MN3508 KV380 + P15x5 (4S)",
+    source_url=TMOTOR_MN3508_URL,
+    prop_source_url=TMOTOR_P15_URL,
+    retrieved="2026-07-03",
+    voltage_v=14.8,
+    cells=4,
+    motor_mass_g=103.0,
+    prop_mass_g=21.0,
+    prop_diameter_in=15.0,
+    price_usd=69.90 + 55.90 / 2.0,
+    curve=(
+        MotorPropPoint(0.50, 430.0, 1.6, 23.68),
+        MotorPropPoint(0.65, 670.0, 3.4, 50.32),
+        MotorPropPoint(0.75, 820.0, 5.0, 74.0),
+        MotorPropPoint(0.85, 1000.0, 6.4, 94.72),
+        MotorPropPoint(1.00, 1100.0, 7.5, 111.0),
+    ),
+)
+
+# 22.2V (6S) 15x5CF rows, verified against the MN3508 page Test Data table
+# (2026-07-03): 50%/820g/3.6A, 65%/1200g/6.1A, 75%/1500g/9.5A,
+# 85%/1700g/11.3A, 100%/1880g/13.3A. Deleted once as fabricated and restored
+# after row-by-row re-verification; these are official bench rows.
+MN3508_KV380_15x5_6S = MotorPropCombo(
+    name="T-Motor MN3508 KV380 + P15x5 (6S)",
+    source_url=TMOTOR_MN3508_URL,
+    prop_source_url=TMOTOR_P15_URL,
+    retrieved="2026-07-03",
+    voltage_v=22.2,
+    cells=6,
+    motor_mass_g=103.0,
+    prop_mass_g=21.0,
+    prop_diameter_in=15.0,
+    price_usd=69.90 + 55.90 / 2.0,
+    curve=(
+        MotorPropPoint(0.50, 820.0, 3.6, 79.92),
+        MotorPropPoint(0.65, 1200.0, 6.1, 135.42),
+        MotorPropPoint(0.75, 1500.0, 9.5, 210.9),
+        MotorPropPoint(0.85, 1700.0, 11.3, 250.86),
+        MotorPropPoint(1.00, 1880.0, 13.3, 295.26),
+    ),
+)
+
+
+TMOTOR_U7_V2_URL = "https://store.tmotor.com/product/tmotor-u7-v2-motor-u-power.html"
+TMOTOR_P17_URL = "https://store.tmotor.com/product/polish-carbon-fiber-17x5_8-prop.html"
+
+# T-Motor U7 V2.0 KV490 at 14.8V/4S: manufacturer bench rows, not
+# voltage-scaled 6S data. The pair fills the catalog's heavy-payload 4S gap -
+# MN3508 4S/P15 tops out at 1.1kg per rotor, U7 reaches 3.0/3.24kg on 17/18in
+# props. Manufacturer fields retrieved 2026-07-14:
+# - U7 page: motor incl. cable 299g, 3-8S, complete 14.8V curves below;
+# - P17 page: single-blade integrated weight 26.5+/-1.5g;
+# - P18 page: single-blade integrated weight 31.5g.
+U7_V2_KV490_17x58_4S = MotorPropCombo(
+    name="T-Motor U7 V2 KV490 + P17x5.8 (4S)",
+    source_url=TMOTOR_U7_V2_URL,
+    prop_source_url=TMOTOR_P17_URL,
+    retrieved="2026-07-14",
+    voltage_v=14.8,
+    cells=4,
+    motor_mass_g=299.0,
+    prop_mass_g=26.5,
+    prop_diameter_in=17.0,
+    price_usd=149.90 + 71.90 / 2.0,
+    curve=(
+        MotorPropPoint(0.50, 1100.0, 7.1, 105.0),
+        MotorPropPoint(0.65, 1720.0, 12.9, 191.0),
+        MotorPropPoint(0.75, 2190.0, 18.5, 274.0),
+        MotorPropPoint(0.85, 2600.0, 24.7, 366.0),
+        MotorPropPoint(1.00, 3000.0, 30.3, 448.0),
+    ),
+)
+
+U7_V2_KV490_18x61_4S = MotorPropCombo(
+    name="T-Motor U7 V2 KV490 + P18x6.1 (4S)",
+    source_url=TMOTOR_U7_V2_URL,
+    prop_source_url=TMOTOR_P18_URL,
+    retrieved="2026-07-14",
+    voltage_v=14.8,
+    cells=4,
+    motor_mass_g=299.0,
+    prop_mass_g=31.5,
+    prop_diameter_in=18.0,
+    price_usd=149.90 + 82.90 / 2.0,
+    curve=(
+        MotorPropPoint(0.50, 1280.0, 8.4, 124.0),
+        MotorPropPoint(0.65, 2020.0, 15.6, 231.0),
+        MotorPropPoint(0.75, 2500.0, 21.8, 323.0),
+        MotorPropPoint(0.85, 2900.0, 29.0, 429.0),
+        MotorPropPoint(1.00, 3240.0, 34.6, 512.0),
+    ),
+)
+
+
+# ── Battery packs - all 6S (cells_match with the 6S combos), Gens Ace/Tattu
+# pages (genstattu.com), net weights as published, retrieved 2026-07-03.
+# price_usd=None: page prices not captured; the mass axis is the default.
+TATTU_PACKS = (
+    BatteryPack(
+        name="Tattu G-Tech 8000mAh 6S 25C",
+        source_url="https://genstattu.com/tattu-8000mah-22-2v-25c-6s1p-lipo-battery-pack-with-xt60-plug.html",
+        retrieved="2026-07-03",
+        capacity_mah=8000.0, cells=6, mass_g=1160.0, c_rating=25.0,
+    ),
+    BatteryPack(
+        name="Tattu Plus 10000mAh 6S 25C",
+        source_url="https://genstattu.com/tattu-plus-22-2v-25c-6s-liPo-battery-10000-mah-with-as150-xt150-plug.html",
+        retrieved="2026-07-03",
+        capacity_mah=10000.0, cells=6, mass_g=1517.0, c_rating=25.0,
+    ),
+    BatteryPack(
+        name="Tattu Plus 12000mAh 6S 15C",
+        source_url="https://genstattu.com/tattu-plus-15c-12000mah-6s1p-as150-xt150-plug-lipo-battery.html",
+        retrieved="2026-07-03",
+        capacity_mah=12000.0, cells=6, mass_g=1670.0, c_rating=15.0,
+    ),
+    BatteryPack(
+        name="Tattu Plus 16000mAh 6S 15C",
+        source_url="https://genstattu.com/tattu-plus-16000mah-6s-15c-22-2v-lipo-battery-pack-with-xt90s/",
+        retrieved="2026-07-03",
+        capacity_mah=16000.0, cells=6, mass_g=1932.0, c_rating=15.0,
+    ),
+    BatteryPack(
+        name="Tattu Plus 22000mAh 6S 25C",
+        source_url="https://genstattu.com/tattu-plus-25c-22000mah-6s1p-xt90-smart-lipo-battery.html",
+        retrieved="2026-07-03",
+        capacity_mah=22000.0, cells=6, mass_g=2650.0, c_rating=25.0,
+    ),
+)
+
+# Tattu/Gens Ace official pages, retrieved 2026-07-05. These larger 4S packs
+# keep the 4S catalog aligned with the inner BO capacity domain; the smaller
+# R-Line packs remain for short-endurance/racing-size designs.
+TATTU_4S_PACKS = (
+    BatteryPack(
+        # Official UAV pack page: 4S1P/14.8V, 25C, net 940g +/-20g.
+        # This fills the former 5200->16000mAh capacity/mass discontinuity.
+        name="Tattu 10000mAh 4S 25C (UAV)",
+        source_url=(
+            "https://www.genstattu.com/"
+            "tattu-10000mah-14-8v-25c-4s1p-lipo-battery-pack-without-plug.html"
+        ),
+        retrieved="2026-07-14",
+        capacity_mah=10000.0,
+        cells=4,
+        mass_g=940.0,
+        c_rating=25.0,
+    ),
+    BatteryPack(
+        name="Tattu G-Tech 5200mAh 4S 35C",
+        source_url="https://genstattu.com/tattu-5200mah-14-8v-35c-4s1p-lipo-battery-pack-with-xt60-plug.html",
+        retrieved="2026-07-05",
+        capacity_mah=5200.0,
+        cells=4,
+        mass_g=436.5,
+        c_rating=35.0,
+        price_usd=62.99,
+    ),
+    BatteryPack(
+        name="Tattu 16000mAh 4S 30C",
+        source_url="https://genstattu.com/tattu-16000mah-30c-14-8v-4s-lipo-battery-pack-with-xt90s-f-plug/",
+        retrieved="2026-07-05",
+        capacity_mah=16000.0,
+        cells=4,
+        mass_g=1590.0,
+        c_rating=30.0,
+        price_usd=335.99,
+    ),
+    BatteryPack(
+        name="Tattu G-Tech 22000mAh 4S 25C (UAV)",
+        source_url="https://genstattu.com/tattu-g-tech-4s-22000mah-14-8v-25c-lipo-battery-with-xt90-s-plug-for-uav/",
+        retrieved="2026-07-05",
+        capacity_mah=22000.0,
+        cells=4,
+        mass_g=2450.0,
+        c_rating=25.0,
+        price_usd=354.99,
+    ),
+    BatteryPack(
+        name="Tattu R-Line V5 1300mAh 4S 150C",
+        source_url=(
+            "https://genstattu.com/"
+            "tattu-r-line-version-5-0-1300mah-4s-14-8v-150c-lipo-battery-pack-with-xt60-plug/"
+        ),
+        retrieved="2026-07-03",
+        capacity_mah=1300.0,
+        cells=4,
+        mass_g=156.0,
+        c_rating=150.0,
+        price_usd=29.99,
+    ),
+    BatteryPack(
+        name="Tattu R-Line V5 850mAh 4S 150C",
+        source_url=(
+            "https://genstattu.com/"
+            "tattu-r-line-version-5-0-850mah-4s-150c-14-8v-lipo-battery-pack-with-xt30u-f-plug/"
+        ),
+        retrieved="2026-07-03",
+        capacity_mah=850.0,
+        cells=4,
+        mass_g=100.0,
+        c_rating=150.0,
+        price_usd=22.99,
+    ),
+    BatteryPack(
+        name="Tattu 650mAh 4S 95C LiHV",
+        source_url="https://genstattu.com/tattu-650mah-4s-15-2v-95c-lipo-battery-long-pack-with-xt30-plug/",
+        retrieved="2026-07-03",
+        capacity_mah=650.0,
+        cells=4,
+        mass_g=60.0,
+        c_rating=95.0,
+        price_usd=16.49,
+    ),
+)
+
+
+# Enepaq manufacturer pages and datasheets, retrieved 2026-07-14. Both are 4S
+# high-energy Li-ion packs at 3.6V/cell nominal, so the explicit 14.4V value
+# is kept for voltage-aware evaluation rather than treated as a 14.8V LiPo.
+ENEPAQ_4S_PACKS = (
+    BatteryPack(
+        name="Enepaq 24000mAh 4S8P 14.4V Li-ion",
+        source_url=(
+            "https://enepaq.com/product/"
+            "li-ion-24000-mah-4s8p-14-4v-battery-pack/"
+        ),
+        retrieved="2026-07-14",
+        capacity_mah=24000.0,
+        cells=4,
+        mass_g=1860.0,
+        c_rating=10.0,
+        nominal_voltage_v=14.4,
+    ),
+    BatteryPack(
+        name="Enepaq 30000mAh 4S10P 14.4V Li-ion",
+        source_url=(
+            "https://enepaq.com/product/"
+            "li-ion-30000-mah-4s10p-14-4v-battery-pack/"
+        ),
+        retrieved="2026-07-14",
+        capacity_mah=30000.0,
+        cells=4,
+        mass_g=2300.0,
+        c_rating=10.0,
+        nominal_voltage_v=14.4,
+    ),
+)
+
+
+# ── Frames.
+# Provenance (§7 flagged): older X6/650 entries cite distributor pages that
+# reproduce the manufacturer spec sheet (net weight / wheelbase / prop range),
+# because the Tarot site was not reliably reachable when they were collected.
+# New entries prefer Tarot manufacturer pages when reachable.
+# Holybro S500/X650 rejected: only ARF/kit-with-motors weights are published,
+# not the bare-frame mass this catalog's mass model needs.
+TAROT_FRAMES = (
+    Frame(
+        # Tarot manufacturer page: T960 TL960A foldable hexa, 1050g frame weight, 25mm
+        # booms, 1755/1855 propellers. Battery mount and landing/integration hardware
+        # are carried by the separate 500g integration budget, not assumed free.
+        name="Tarot T960 TL960A (hexa 960mm)",
+        source_url=(
+            "https://tarotrc.com/Product/Detail.aspx?"
+            "Id=f86fa22e-c589-41df-8c14-d9886f804a05&Lang=en"
+        ),
+        retrieved="2026-07-14",
+        mass_g=1050.0,
+        arms=6,
+        max_prop_in=18.0,
+    ),
+    Frame(
+        name="Tarot X6 TL6X001 (hexa 960mm)",
+        source_url="https://www.foxtechfpv.com/tarot-x6-hexacopter-frame-p-1945.html",
+        retrieved="2026-07-03",
+        mass_g=2000.0, arms=6, max_prop_in=18.0,
+    ),
+    Frame(
+        name="Tarot 650 Sport TL65S01 (quad 600mm)",
+        source_url="https://www.arrishobby.com/products/tarot-650-sport-quadcopter-tl65s01-with-electric-retractable-landing-skid",
+        retrieved="2026-07-03",
+        mass_g=750.0, arms=4, max_prop_in=15.0,
+    ),
+    Frame(
+        # Tarot X8 TL8X000 octocopter frame kit with retractable landing gear.
+        # Tarot page: eight power arms; shaft 1050MM, prop 15'', Weight 2.7KG.
+        # Net frame mass = 2250g: the single "2.7KG" figure is the gross weight,
+        # reported across distributors as N.W./G.W. = 2250g/2700g. The mass model
+        # needs bare-frame net weight and the rest of the catalog (X6=2000g, 650=750g)
+        # is net, so 2250g is used. max_prop 15'' = the suggested 1555 prop
+        # (conservative; the 1050mm frame likely accepts larger).
+        name="Tarot X8 TL8X000 (octo 1050mm)",
+        source_url=(
+            "http://tarotrc.com/Product/Detail.aspx?Lang=en&Id="
+            "4166ffb8-2821-4b12-b23a-558fd5d85d7c"
+        ),
+        retrieved="2026-07-04",
+        mass_g=2250.0, arms=8, max_prop_in=15.0,
+    ),
+)
+
+
+DEFAULT_CATALOG = ComponentCatalog(
+    combos=(MN5008_KV340_18x61, MN4006_KV380_16x54,
+            MN3508_KV380_15x5_4S, MN3508_KV380_15x5_6S,
+            U7_V2_KV490_17x58_4S, U7_V2_KV490_18x61_4S),
+    packs=TATTU_PACKS + TATTU_4S_PACKS + ENEPAQ_4S_PACKS,
+    frames=TAROT_FRAMES,
+    integration_bundles=(
+        MULTIROTOR_INTEGRATION_BUDGET_400G,
+        MULTIROTOR_INTEGRATION_BUDGET_500G,
+        MULTIROTOR_INTEGRATION_BUDGET_600G,
+    ),
+)
+
+
+CATALOG = {c.name: c for c in DEFAULT_CATALOG.combos}

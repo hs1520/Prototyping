@@ -1,0 +1,228 @@
+from __future__ import annotations
+
+from src.dse.domain_objective import (
+    architecture_design,
+    architecture_objectives,
+    endurance_target,
+    normalize_variation_ownership,
+    objective_families,
+    objective_names,
+    requirement_targets,
+    strip_inner_loop_attrs,
+    variant_design_inputs,
+)
+
+
+_INCONSISTENT_POWER = """package D {
+    port def Sig;
+    part def PowerIface { out port p : Sig; }
+    part def Power_4s :> PowerIface { attribute batteryCells : Real = 4.0; attribute batteryCapacityMah : Real = 3000.0; }
+    part def Power_8s :> PowerIface { attribute batteryCells : Real = 8.0; }
+    part def Power_12s :> PowerIface { attribute batteryCells : Real = 12.0; attribute batteryCapacityMah : Real = 11170.0; }
+    part def Sys {
+        variation part powerSystem : PowerIface { doc /* satisfies REQ-PERF-002 */
+            variant part p4 : Power_4s; variant part p8 : Power_8s; variant part p12 : Power_12s; }
+    }
+}"""
+
+
+def test_strip_inner_loop_uniform():
+    from src.dse.variation_parser import admitted, parse_variation_points
+    pts = admitted(parse_variation_points(_INCONSISTENT_POWER))[0]
+    out, notes = strip_inner_loop_attrs(_INCONSISTENT_POWER, pts)
+    for t in ("Power_4s", "Power_8s", "Power_12s"):
+        assert variant_design_inputs(out, t) == {"battery_cells": float(t.split("_")[1][:-1])}
+    assert any("batteryCapacityMah" in n for n in notes)
+
+
+def test_ontology_single_source():
+    from src.dse.domain_objective import (
+        DESIGN_ONTOLOGY, DESIGN_INPUTS, DESIGN_FIELD_ATTR, DESIGN_DEFAULTS,
+        _FIELD_CONCERN, _INNER_LOOP_FIELDS,
+    )
+    assert DESIGN_INPUTS == tuple((d.field, d.attr) for d in DESIGN_ONTOLOGY)
+    assert DESIGN_FIELD_ATTR == {d.field: d.attr for d in DESIGN_ONTOLOGY}
+    assert DESIGN_DEFAULTS == {d.field: d.default for d in DESIGN_ONTOLOGY}
+    assert _INNER_LOOP_FIELDS == tuple(d.field for d in DESIGN_ONTOLOGY if d.layer == "inner")
+    assert _FIELD_CONCERN == {d.field: d.concern for d in DESIGN_ONTOLOGY if d.concern}
+    assert all(d.layer in ("outer", "inner") for d in DESIGN_ONTOLOGY)
+    assert "battery_capacity_mah" in _INNER_LOOP_FIELDS
+
+
+def test_range_rejects_altitude():
+    from src.dse.domain_objective import range_requirement
+    # altitude <=120m AGL is not an operational-range target (metre-unit trap)
+    assert range_requirement(["REQ-CONS-001: shall not exceed a flight altitude of 120 metres AGL."]) == (None, 0.0)
+    assert range_requirement(["REQ-FUNC-002: avoid before separation below 5 metres."]) == (None, 0.0)
+    assert range_requirement(["REQ-PERF-004: operational range of at least 10000 metres."]) == ("REQ-PERF-004", 10000.0)
+    assert range_requirement(["REQ-PERF-004: maximum range of 8 km."]) == ("REQ-PERF-004", 8000.0)
+
+
+def test_evaluation_overrides_payload():
+    from src.dse.domain_objective import evaluation_overrides
+    ov = evaluation_overrides(["REQ-PERF-002: endurance at max rated payload.",
+                               "REQ-FUNC-003: transport payloads up to 2.5 kg.",
+                               "REQ-CONS-003: takeoff weight including payload <= 25 kg."])
+    assert ov == {"payload_mass_kg": 2.5}
+    assert evaluation_overrides(["REQ-PERF-002: endurance >= 25 minutes."]) == {}
+
+
+def test_normalize_runs_both_passes():
+    from src.dse.domain_objective import normalize_variation_space
+    from src.dse.variation_parser import admitted, parse_variation_points
+    model = _OVERLAP.replace(
+        "part def Hexa_Prop :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.2; }",
+        "part def Hexa_Prop :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.2; attribute batteryCapacityMah : Real = 9000.0; }")
+    pts = admitted(parse_variation_points(model))[0]
+    out, notes = normalize_variation_space(model, pts)
+    assert variant_design_inputs(out, "Frame_Octo") == {}
+    assert "battery_capacity_mah" not in variant_design_inputs(out, "Hexa_Prop")
+    assert any("kept in" in n for n in notes) and any("inner-loop" in n for n in notes)
+
+
+def test_strip_inner_loop_noop():
+    model = _INCONSISTENT_POWER.replace(" attribute batteryCapacityMah : Real = 3000.0;", "") \
+                               .replace(" attribute batteryCapacityMah : Real = 11170.0;", "")
+    from src.dse.variation_parser import admitted, parse_variation_points
+    pts = admitted(parse_variation_points(model))[0]
+    out, notes = strip_inner_loop_attrs(model, pts)
+    assert out == model and notes == []
+from src.dse.variation_parser import admitted as _admitted
+from src.dse.variation_parser import parse_variation_points as _parse
+
+
+_OVERLAP = """package Drone {
+    port def Sig;
+    part def LiftIface { in port cmd : Sig; out port thrust : Sig; }
+    part def Hexa_Prop :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.2; }
+    part def Octo_Prop :> LiftIface { attribute rotorCount : Real = 8.0; attribute rotorRadiusM : Real = 0.15; }
+    part def Frame_Hexa :> LiftIface { attribute rotorCount : Real = 6.0; attribute rotorRadiusM : Real = 0.165; }
+    part def Frame_Octo :> LiftIface { attribute rotorCount : Real = 8.0; attribute rotorRadiusM : Real = 0.22; }
+    part def Sys {
+        variation part propulsionSystem : LiftIface { doc /* satisfies REQ-PERF-002 */
+            variant part p_hexa : Hexa_Prop; variant part p_octo : Octo_Prop; }
+        variation part airframe : LiftIface { doc /* satisfies REQ-CONS-003 */
+            variant part f_hexa : Frame_Hexa; variant part f_octo : Frame_Octo; }
+    }
+}"""
+
+
+def _pts(model):
+    return _admitted(_parse(model))[0]
+
+
+def test_normalize_strips_duplicate():
+    out, notes = normalize_variation_ownership(_OVERLAP, _pts(_OVERLAP))
+    assert variant_design_inputs(out, "Hexa_Prop") == {"rotor_count": 6.0, "rotor_radius_m": 0.2}
+    assert variant_design_inputs(out, "Frame_Octo") == {}
+    assert any("kept in 'propulsionSystem'" in n for n in notes)
+    assert any("airframe' is now physics-inert" in n for n in notes)
+
+
+def test_normalize_noop_without_overlap():
+    out, notes = normalize_variation_ownership(_MODEL, _pts(_MODEL))
+    assert out == _MODEL and notes == []
+
+
+def test_normalize_first_declarer_fallback():
+    # neutral names, so no concern keyword matches either point -> keep first declarer
+    model = """package Drone {
+    port def Sig;
+    part def Iface { in port cmd : Sig; out port thrust : Sig; }
+    part def OptA1 :> Iface { attribute rotorCount : Real = 6.0; }
+    part def OptA2 :> Iface { attribute rotorCount : Real = 8.0; }
+    part def OptB1 :> Iface { attribute rotorCount : Real = 6.0; }
+    part def OptB2 :> Iface { attribute rotorCount : Real = 8.0; }
+    part def Sys {
+        variation part groupA : Iface { doc /* satisfies REQ-PERF-002 */
+            variant part a1 : OptA1; variant part a2 : OptA2; }
+        variation part groupB : Iface { doc /* satisfies REQ-CONS-003 */
+            variant part b1 : OptB1; variant part b2 : OptB2; }
+    }
+}"""
+    out, notes = normalize_variation_ownership(model, _pts(model))
+    assert any("first declarer" in n for n in notes)
+    assert variant_design_inputs(out, "OptA1") == {"rotor_count": 6.0}
+    assert variant_design_inputs(out, "OptB2") == {}
+
+
+def test_endurance_ignores_seconds():
+    # a response-time req in seconds is not flight endurance (minutes); the inner BO
+    # would otherwise size for ~1 unit. Regression for the >=1.0 constraint bug.
+    reqs = [
+        "REQ-FUNC-006: incorporate a waypoint within 1.0 second of command.",
+        "REQ-PERF-002: sustain flight for a minimum of 25 minutes.",
+    ]
+    assert endurance_target(reqs) == 25.0
+
+
+def test_endurance_zero_without_units():
+    assert endurance_target(["REQ-FUNC-006: respond within 1.0 second."]) == 0.0
+from src.dse.variation_parser import admitted, parse_variation_points
+
+_MODEL = """package Drone {
+    part def QuadRotor { attribute batteryCapacityMah : Real = 12000.0; attribute massKg : Real = 0.3; attribute rotorRadiusM : Real = 0.16; attribute cruiseSpeedMps : Real = 16.0; }
+    part def VtolWing  { attribute batteryCapacityMah : Real = 5000.0; attribute massKg : Real = 0.3; attribute rotorRadiusM : Real = 0.13; attribute cruiseSpeedMps : Real = 26.0; }
+    part def Airframe {
+        variation part liftArch {
+            doc /* rationale: speed vs endurance; satisfies REQ-PERF-001, REQ-PERF-002 */
+            variant part quad : QuadRotor;
+            variant part vtol : VtolWing;
+        }
+    }
+}"""
+_REQS = ["REQ-PERF-001: cruise speed at least 20 m/s", "REQ-PERF-002: endurance at least 30 minutes"]
+
+
+def test_requirement_targets_strip_id():
+    t = requirement_targets(_REQS)
+    assert ("speed", 20.0) in t["REQ-PERF-001"]
+    assert all(v != 1.0 for _, v in t["REQ-PERF-001"])  # the "001" not parsed as a target
+    assert ("time", 30.0) in t["REQ-PERF-002"]
+
+
+def test_variant_inputs_by_field():
+    d = variant_design_inputs(_MODEL, "QuadRotor")
+    assert d["battery_capacity_mah"] == 12000.0
+    assert d["payload_mass_kg"] == 0.3
+    assert d["rotor_radius_m"] == 0.16
+    assert d["cruise_speed_mps"] == 16.0
+
+
+def test_design_merges_defaults():
+    vps, _ = admitted(parse_variation_points(_MODEL))
+    di = architecture_design(vps, {"liftArch": "quad"}, _MODEL)
+    assert di.payload_mass_kg == 0.3 and di.battery_capacity_mah == 12000.0
+    assert di.battery_cells == 4
+
+
+def test_objective_names_family_and_cost():
+    # speed is settable (L1), not a variant objective; only emergent endurance remains
+    assert objective_families(_REQS) == ["time"]
+    assert objective_names(_REQS) == ["time_sat", "cost_efficiency"]
+
+
+def test_quad_and_vtol_nondominated():
+    vps, _ = admitted(parse_variation_points(_MODEL))
+    quad = architecture_objectives(vps, {"liftArch": "quad"}, _MODEL, _REQS)
+    vtol = architecture_objectives(vps, {"liftArch": "vtol"}, _MODEL, _REQS)
+    assert quad["time_sat"] > vtol["time_sat"]
+    assert vtol["cost_efficiency"] > quad["cost_efficiency"]
+
+
+def test_bounds_reject_over_spec_payload():
+    from src.dse.domain_objective import within_requirement_bounds
+    reqs = ["REQ-FUNC-003: transport payloads with a gross mass of up to 2.5 kg"]
+    assert within_requirement_bounds({"payload_mass_kg": 2.5}, ["REQ-FUNC-003"], reqs)
+    assert not within_requirement_bounds({"payload_mass_kg": 10.0}, ["REQ-FUNC-003"], reqs)
+    assert within_requirement_bounds({"payload_mass_kg": 10.0}, [], reqs)
+
+
+def test_field_family_exact_not_substring():
+    # variant-attribute classification comes from the ontology (exact); _family_of
+    # substring matching mis-read "rotorRadiusM" as the 'count' family.
+    from src.dse.domain_objective import DESIGN_FIELD_FAMILY
+    assert DESIGN_FIELD_FAMILY == {"payload_mass_kg": "mass", "battery_cells": "count",
+                                   "rotor_count": "count", "cruise_speed_mps": "speed"}
+    assert "rotor_radius_m" not in DESIGN_FIELD_FAMILY
+    assert "battery_capacity_mah" not in DESIGN_FIELD_FAMILY

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Dict
 
+from .suppressed import record_suppressed
+
 try:
     import syside
     SYSIDE_OK = True
@@ -11,13 +13,30 @@ except ImportError:
     SYSIDE_OK = False
 
 
-def extract_attr_values(text: str) -> Dict[str, float]:
-    """Evaluate every AttributeUsage expression in *text* via the syside Compiler.
+def coerce_static_number(value) -> float | None:
+    """A static scalar from a syside evaluation result, or None.
 
-    Returns {attribute_name: float_value}.  Used to supplement IR model
-    attribute values that may be unparsed expressions (e.g. ``mass * g``).
-    Falls back to {} when syside is unavailable or parsing fails.
+    ``Compiler.evaluate`` returns the referenced node (an ``AttributeUsage``) when
+    the initializer is a feature-reference chain, which is what the typed semantic
+    bindings write (``attribute currentX : T = channel.payload.feature;``). Such
+    an initializer has no static scalar, so callers cannot ``float()`` blindly -
+    the ablation pilot recorded 369 suppressed TypeErrors from three sites that
+    did.
     """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def extract_attr_values(text: str) -> Dict[str, float]:
+    """Evaluate every AttributeUsage expression in *text* via the syside Compiler."""
     if not SYSIDE_OK or not text:
         return {}
     out: Dict[str, float] = {}
@@ -30,10 +49,12 @@ def extract_attr_values(text: str) -> Dict[str, float]:
                 if expr is None:
                     continue
                 val, report = compiler.evaluate(expr)
-                if not report.fatal and val is not None:
-                    out[attr.name] = float(val)
-            except Exception:
-                pass
-    except Exception:
-        pass
+                if not report.fatal:
+                    number = coerce_static_number(val)
+                    if number is not None:
+                        out[attr.name] = number
+            except Exception as exc:
+                record_suppressed("utils.syside_utils.attr_eval", exc)
+    except Exception as exc:
+        record_suppressed("utils.syside_utils.attr_load", exc)
     return out
