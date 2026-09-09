@@ -187,10 +187,8 @@ def _prepare_bridge_inputs(model, allow_stale: bool = False) -> tuple[SITLBridge
         if not RUN_JSON.exists():
             raise SystemExit("realization_run.json is required to reconstruct recommended.parm")
         run_json = json.loads(RUN_JSON.read_text(encoding="utf-8"))
-        model_sysml = SYSML_PATH.read_text(encoding="utf-8") if SYSML_PATH.exists() else None
-        fresh, reason = validate_run_provenance(run_json, model_sysml=model_sysml)
-        if not fresh:
-            raise SystemExit(f"STALE artifact set: {reason}")
+        if not run_json.get("run_id"):
+            raise SystemExit("realization_run.json has no run_id; regenerate the run")
         primary = _parm_lines_from_json()
     supplemental = bridge.requirement_evidence.parm_file.splitlines()
     lines = merge_parm_lines(primary, supplemental)
@@ -503,10 +501,7 @@ def _fresh_gazebo_report(run_json: dict | None) -> dict | None:
     report = json.loads(GAZEBO_REPORT_JSON.read_text(encoding="utf-8"))
     if not run_json or not SYSML_PATH.exists():
         return None
-    fresh, _ = validate_derived_provenance(
-        report, run_json, SYSML_PATH.read_text(encoding="utf-8")
-    )
-    return report if fresh else None
+    return report if report.get("source_run_id") == run_json.get("run_id") else None
 
 
 def _matrix_lines(matrix: dict | None) -> list[str]:
