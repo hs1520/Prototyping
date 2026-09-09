@@ -77,10 +77,7 @@ def _run(engine, model):
 
 
 def test_pins_33f87cc6_collisions():
-    text = (
-        _REPO / "examples/output/runs"
-        / "33f87cc6-5b61-4447-9df0-e10c022ec4a2/final_model.sysml"
-    ).read_text()
+    text = (_REPO / "tests/fixtures/collisions_33f87cc6.sysml").read_text()
     issues = namespace_integrity_issues(text)
     assert len(issues) == 2
     joined = " ".join(issues)

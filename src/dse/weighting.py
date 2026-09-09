@@ -6,8 +6,7 @@ recommend one design from the front, replacing the hardcoded
 requirement set's own composition (category counts x priority), so every weight
 traces to the input. ``sensitivity`` samples the whole weight simplex (Dirichlet)
 and reports how robust a recommendation is: the fraction of weight space in which
-it wins, and how often each design would be selected. Pure-Python (no numpy). See
-docs/DSE_REDESIGN.md §三-A.
+it wins, and how often each design would be selected. Pure-Python (no numpy).
 """
 from __future__ import annotations
 

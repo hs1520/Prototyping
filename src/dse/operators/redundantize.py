@@ -5,9 +5,9 @@ configuration (single -> dual -> triple) with a voting/arbitration state machine
 Unlike the legacy regex injection (``apply_best_config_to_model`` +
 ``_mcts_structural_grounding_pass``), each variant is a pre-defined catalog part
 def that Syside parses cleanly and ``resolve`` binds it rather than doing text
-surgery; all fragments are Syside 0.8.8 verified (0 errors). See
-docs/DSE_OPERATORS.md §#2 for design and literature provenance (TMR: Lyons &
-Vanderkulk 1962; standby redundancy: M-out-of-N reliability theory).
+surgery; all fragments are Syside 0.8.8 verified (0 errors).
+Literature: TMR (Lyons and Vanderkulk 1962); standby redundancy from M-out-of-N
+reliability theory.
 """
 from __future__ import annotations
 
@@ -28,8 +28,7 @@ _SINGLE = """    part def SingleChannel {
 
 # failedChannels is derived from per-channel health, so a channel fault
 # propagates into the voting guard. resolve(with_fanin=True) connects the
-# failsafe output downstream. See docs/DSE_OPERATORS.md §#2 and the Problem-2
-# fix in grounded_eval.
+# failsafe output downstream.
 _DUAL = """    part def DualChannelStandby {
         in port sensorA : SensorSignal;
         in port sensorB : SensorSignal;

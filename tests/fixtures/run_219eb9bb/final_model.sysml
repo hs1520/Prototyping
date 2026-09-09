@@ -102,9 +102,58 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
-
-    port def DataPort;
-    port def RfLinkPort;
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
     private import MeasurementReferences::*;
     private import ScalarValues::*;
@@ -129,45 +178,102 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
     private import ISQ::*;
     private import SI::*;
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
-    // --------------------------------------------------------
-    // Data Item Definitions (Semantic Bindings & Protocols)
-    // --------------------------------------------------------
+
+    // -------------------------------------------------------------------------
+    // PLANNED EVENT SYMBOLS
+    // -------------------------------------------------------------------------
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+
+    // -------------------------------------------------------------------------
+    // DATA ITEM DEFINITIONS
+    // -------------------------------------------------------------------------
     item def ThreatAvoidanceSeparationData {
         attribute airframeObstacleSeparation : LengthValue;
     }
-
+    
     item def PayloadThrottleMarginData {
         attribute hoverThrottleMargin : DimensionOneValue;
     }
-
+    
     item def AttitudeDeviationsData {
         attribute rollPitchAttitudeDeviations : AngularMeasureValue;
     }
-
+    
     item def FlightDurationData {
         attribute duration : DurationValue;
     }
-
+    
     item def AirspeedData {
         attribute cruiseAirspeed : SpeedValue;
     }
-
+    
     item def GroundSpeedData {
         attribute forwardGroundSpeed : SpeedValue;
     }
-
+    
     item def OperationalRangeData {
         attribute range : LengthValue;
     }
-
+    
     item def FlightAltitudeData {
         attribute altitude : LengthValue;
     }
-
+    
     item def TakeOffMassData {
         attribute takeOffMassPayloadBattery : MassValue;
     }
@@ -177,124 +283,136 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     item def LandingStateData;
     item def GeographicPositionData;
     item def BatteryStateData;
-    item def MavlinkTelemetryData;
+    
+    item def MavlinkTelemetryData {
+        doc /* MAVLink v2.0 protocol over AES-256 encrypted RF channel */
+    }
+    
     item def PayloadCmdData;
     item def NavigateRtbTrajectoryCmdData;
-    item def CANSignalData;
-    item def GnssCorrectionsData;
+    
+    item def GnssCorrectionsData {
+        doc /* RTCM 10403.3 standard differential GNSS corrections */
+    }
+    
     item def SensorStatusData;
-    item def MavlinkSignalData;
+    item def RfLinkData;
     item def UplinkStatusData;
-    item def RemoteIdData;
-    item def PropulsionStatusData;
+    
+    item def RemoteIdData {
+        doc /* ASTM F3411-22 standard remote identification */
+    }
+    
     item def ParachuteCmdData;
+    item def PropulsionStatusData;
+    item def GenericData;
 
-    // --------------------------------------------------------
-    // Port Definitions
-    // --------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // PORT DEFINITIONS
+    // -------------------------------------------------------------------------
     port def ThreatAvoidanceSeparationPort {
         item payload : ThreatAvoidanceSeparationData;
     }
-
+    
     port def PayloadThrottleMarginPort {
         item payload : PayloadThrottleMarginData;
     }
-
+    
     port def AttitudeDeviationsPort {
         item payload : AttitudeDeviationsData;
     }
-
+    
     port def FlightDurationPort {
         item payload : FlightDurationData;
     }
-
+    
     port def AirspeedPort {
         item payload : AirspeedData;
     }
-
+    
     port def GroundSpeedPort {
         item payload : GroundSpeedData;
     }
-
+    
     port def OperationalRangePort {
         item payload : OperationalRangeData;
     }
-
+    
     port def FlightAltitudePort {
         item payload : FlightAltitudeData;
     }
-
+    
     port def TakeOffMassPort {
         item payload : TakeOffMassData;
     }
-
+    
     port def WaypointMissionCommandPort {
         item payload : WaypointMissionCommandData;
     }
-
+    
     port def ArmedAirborneOverrideCmdPort {
         item payload : ArmedAirborneOverrideCmdData;
     }
-
+    
     port def LandingStatePort {
         item payload : LandingStateData;
     }
-
+    
     port def GeographicPositionPort {
         item payload : GeographicPositionData;
     }
-
+    
     port def BatteryStatePort {
         item payload : BatteryStateData;
     }
-
+    
     port def MavlinkTelemetryPort {
         item payload : MavlinkTelemetryData;
     }
-
+    
     port def PayloadCmdPort {
         item payload : PayloadCmdData;
     }
-
+    
     port def NavigateRtbTrajectoryCmdPort {
         item payload : NavigateRtbTrajectoryCmdData;
     }
-
-    port def CANSignalPort {
-        item payload : CANSignalData;
-    }
-
+    
     port def GnssCorrectionsPort {
         item payload : GnssCorrectionsData;
     }
-
+    
     port def SensorStatusPort {
         item payload : SensorStatusData;
     }
-
-    port def MavlinkSignalPort {
-        item payload : MavlinkSignalData;
+    
+    port def RfLinkPort {
+        item payload : RfLinkData;
     }
-
+    
     port def UplinkStatusPort {
         item payload : UplinkStatusData;
     }
-
+    
     port def RemoteIdPort {
         item payload : RemoteIdData;
     }
-
-    port def PropulsionStatusPort {
-        item payload : PropulsionStatusData;
-    }
-
+    
     port def ParachuteCmdPort {
         item payload : ParachuteCmdData;
     }
+    
+    port def PropulsionStatusPort {
+        item payload : PropulsionStatusData;
+    }
+    
+    port def DataPort {
+        item payload : GenericData;
+    }
 
-    // --------------------------------------------------------
-    // Requirement Definitions
-    // --------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // REQUIREMENT DEFINITIONS
+    // -------------------------------------------------------------------------
     requirement def REQ_FUNC_001 { doc /* The system shall autonomously navigate to designated GPS waypoints with a circular error probable (CEP) of less than 1.0 metre. [V: hardware-in-the-loop / field survey] */ }
     requirement def REQ_FUNC_002 { doc /* When approaching a stationary collision threat directly ahead within the forward sensor field of view at a closing speed no greater than 1.5 m/s, the system shall execute an avoidance manoeuvre following threat detection no later than 15 metres, maintaining an airframe-to-obstacle separation of at least 5 metres. */ }
     requirement def REQ_FUNC_003 { doc /* The system shall transport payloads with a gross mass of up to 1.5 kg while maintaining a hover throttle margin of at least 30 percent and roll and pitch RMS within 1.0 degree. */ }
@@ -325,9 +443,9 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     requirement def REQ_CONS_003 { doc /* The system maximum take-off mass, including payload and battery, shall not exceed 8.0 kg. */ }
     requirement def REQ_CONS_004 { doc /* The system shall comply with EASA UAS Category C operational regulations. [V: inspection / regulatory audit] */ }
 
-    // --------------------------------------------------------
-    // Part Definitions
-    // --------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // PART DEFINITIONS
+    // -------------------------------------------------------------------------
     part def FlightController {
         in port threatAvoidanceSeparation : ThreatAvoidanceSeparationPort;
         in port payloadThrottleMargin : PayloadThrottleMarginPort;
@@ -346,8 +464,8 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
         out port mavlinkTelemetry : MavlinkTelemetryPort;
         out port payloadCmd : PayloadCmdPort;
         out port navigateRtbTrajectoryCmd : NavigateRtbTrajectoryCmdPort;
-        in port overrideCmd : DataPort;
-        in port remoteIdIn : RemoteIdPort { doc /* Consume remote ID for logging; satisfies REQ_INTF_003 */ }
+
+        in port overrideCmd : DataPort { doc /* Safety interconnect */ }
 
         attribute currentAirframeObstacleSeparation : LengthValue = threatAvoidanceSeparation.payload.airframeObstacleSeparation;
         attribute minAirframeObstacleSeparation : LengthValue = 5 [m];
@@ -369,8 +487,6 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
         attribute maxTakeOffMassPayloadBattery : MassValue = 8 [kg];
         attribute waypointModificationLatency : DurationValue = 1.0 [s];
         attribute healthReportDelay : DurationValue = 5.0 [s];
-        attribute currentWaypointModificationLatency : Real;
-        attribute currentHealthReportDelay : Real;
 
         satisfy requirement REQ_FUNC_001;
         satisfy requirement REQ_FUNC_002;
@@ -383,7 +499,43 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
         satisfy requirement REQ_PERF_004;
         satisfy requirement REQ_CONS_001;
 
-        action def maintainHoverThrottleMargin { }
+        // PLAN-CONSTRAINT obstacleSeparationConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
+        assert constraint obstacleSeparationConstraint {
+            currentAirframeObstacleSeparation >= minAirframeObstacleSeparation
+        }
+
+        // PLAN-CONSTRAINT throttleMarginConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
+        assert constraint throttleMarginConstraint {
+            currentHoverThrottleMargin >= minHoverThrottleMargin
+        }
+
+        // PLAN-CONSTRAINT airspeedConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
+        assert constraint airspeedConstraint {
+            currentCruiseAirspeed >= minCruiseAirspeed
+        }
+
+        // PLAN-CONSTRAINT operationalRangeConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
+        // Operational range is a mission-end capability evaluated by forward-flight fidelity, not an invariant.
+// PLAN-CONSTRAINT flightAltitudeConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
+        assert constraint flightAltitudeConstraint {
+            currentFlightAltitude <= maxFlightAltitude
+        }
+
+        // PLAN-CONSTRAINT takeOffMassConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
+        assert constraint takeOffMassConstraint {
+            currentTakeOffMassPayloadBattery <= maxTakeOffMassPayloadBattery
+        }
+
+        // PLAN-CONSTRAINT waypointModificationLatencyConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
+        assert constraint waypointModificationLatencyConstraint {
+            waypointModificationLatency <= 1.0
+        }
+
+        // PLAN-CONSTRAINT healthReportDelayConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
+        assert constraint healthReportDelayConstraint {
+            healthReportDelay <= 5.0
+        }
+
         action def executeRtbTrajectory {}
         action def maintainAttitude {}
         action def maintainGroundSpeed {}
@@ -393,36 +545,7 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
         action def sustainFlight {}
         action def transmitHealthReport {}
 
-        // PLAN-CONSTRAINT obstacleSeparationConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
-        assert constraint obstacleSeparationConstraint {
-            currentAirframeObstacleSeparation >= minAirframeObstacleSeparation
-        }
-        // PLAN-CONSTRAINT throttleMarginConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
-        assert constraint throttleMarginConstraint {
-            currentHoverThrottleMargin >= minHoverThrottleMargin
-        }
-        // PLAN-CONSTRAINT airspeedConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
-        assert constraint airspeedConstraint {
-            currentCruiseAirspeed >= minCruiseAirspeed
-        }
-        // PLAN-CONSTRAINT flightAltitudeConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
-        assert constraint flightAltitudeConstraint {
-            currentFlightAltitude <= maxFlightAltitude
-        }
-        // PLAN-CONSTRAINT takeOffMassConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
-        assert constraint takeOffMassConstraint {
-            currentTakeOffMassPayloadBattery <= maxTakeOffMassPayloadBattery
-        }
-        // PLAN-CONSTRAINT waypointModificationLatencyConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
-        assert constraint waypointModificationLatencyConstraint {
-            waypointModificationLatency <= 1.0
-        }
-        // PLAN-CONSTRAINT healthReportDelayConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
-        assert constraint healthReportDelayConstraint {
-            healthReportDelay <= 5.0
-        }
-
-                                        state def SteadyCruiseBehavior {
+                                                                        state def SteadyCruiseBehavior {
             entry; then Idle;
 
             state Idle;
@@ -445,7 +568,11 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
-                                        state def NominalCruiseBehavior {
+    
+    
+    
+
+                                                                        state def NominalCruiseBehavior {
             entry; then Idle;
 
             state Idle;
@@ -468,7 +595,11 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
-                                        state def HeadwindOperationBehavior {
+    
+    
+    
+
+                                                                        state def HeadwindOperationBehavior {
             entry; then Idle;
 
             state Idle;
@@ -491,7 +622,11 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
-                                        state def WaypointModificationBehavior {
+    
+    
+    
+
+                                                                        state def WaypointModificationBehavior {
             entry; then Idle;
 
             state Idle;
@@ -509,7 +644,11 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
-                                        state def HealthReportingBehavior {
+    
+    
+    
+
+                                                                        state def HealthReportingBehavior {
             entry; then Flight;
 
             state Flight;
@@ -527,7 +666,11 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
-                                        state def ReturnToBaseBehavior {
+    
+    
+    
+
+                                                                        state def ReturnToBaseBehavior {
             entry; then Flight;
 
             state Flight;
@@ -545,7 +688,11 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
-                                        state def CollisionAvoidanceBehavior {
+    
+    
+    
+
+                                                                        state def CollisionAvoidanceBehavior {
             entry; then Monitoring;
 
             state Monitoring;
@@ -563,7 +710,11 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
-                                        state def NavigationBehavior {
+    
+    
+    
+
+                                                                        state def NavigationBehavior {
             entry; then Idle;
 
             state Idle;
@@ -576,6 +727,8 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
                 accept WaypointMissionCommandReceived
                 then Navigating;
         }
+    
+    
     
     
     
@@ -608,14 +761,12 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
         out port uplinkStatus : UplinkStatusPort;
         out port gnssCorrections : GnssCorrectionsPort;
         out port remoteId : RemoteIdPort;
-        out port commStatus : DataPort;
+
+        out port commStatus : DataPort { doc /* Safety interconnect */ }
 
         satisfy requirement REQ_FUNC_004;
         satisfy requirement REQ_INTF_001;
         satisfy requirement REQ_INTF_003;
-
-        action def maintainDataLink { }
-        action def BroadcastRemoteId { }
     }
 
     part def PowerSystem {
@@ -629,26 +780,24 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
 
     part def PayloadMechanism {
         in port payloadCmd : PayloadCmdPort;
-        
+
         attribute releaseActuationTime : DurationValue = 2.0 [s];
-        attribute currentReleaseActuationTime : Real;
-        attribute isLocked : Boolean = true;
 
         satisfy requirement REQ_FUNC_005;
         satisfy requirement REQ_PERF_005;
         satisfy requirement REQ_SAFE_006;
         satisfy requirement REQ_SAFE_008;
 
-        action def actuateRelease {}
-        action def defaultToLocked {}
-        action def lockPayload {}
-
         // PLAN-CONSTRAINT releaseActuationTimeConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
         assert constraint releaseActuationTimeConstraint {
             releaseActuationTime <= 2.0
         }
 
-                                        state def PayloadReleaseBehavior {
+        action def actuateRelease {}
+        action def defaultToLocked {}
+        action def lockPayload {}
+
+                                                                        state def PayloadReleaseBehavior {
             entry; then Locked;
 
             state Locked;
@@ -665,8 +814,12 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
+    
+    
+    
+    
 
-                                        state def DeliveryAbortBehavior {
+                                                                        state def DeliveryAbortBehavior {
             entry; then Monitoring;
 
             state Monitoring;
@@ -684,7 +837,11 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
-                                state def PowerOnBehavior {
+    
+    
+    
+
+                                                                        state def PowerOnBehavior {
             entry; then Off;
 
             state Off;
@@ -700,6 +857,11 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
+    
+    
+    
+    
+    
     }
 
     part def PropulsionSystem {
@@ -711,7 +873,7 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
 
         action def maintainControlledFlight {}
 
-                                        state def PropulsionFaultBehavior {
+                                                                        state def PropulsionFaultBehavior {
             entry; then Nominal;
 
             state Nominal;
@@ -728,24 +890,29 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
+    
+    
+    
+    
     }
 
     part def SafetyMonitor {
-        attribute batterySoc : Real = 85.0;
-        attribute commLossTime : Real = 0.0;
-        attribute propulsionCriticalFailure : Boolean = false;
-        attribute sensorSelfTestFailed : Boolean = false;
         in port uplinkStatus : UplinkStatusPort;
         in port sensorStatus : SensorStatusPort;
         in port batteryState : BatteryStatePort;
         in port propulsionStatus : PropulsionStatusPort;
         out port armedAirborneOverrideCmd : ArmedAirborneOverrideCmdPort;
         out port parachuteCmd : ParachuteCmdPort;
-        out port overrideCmd : DataPort;
-        in port commStatus : DataPort;
 
+        out port overrideCmd : DataPort { doc /* Safety interconnect */ }
+        in port commStatus : DataPort { doc /* Safety interconnect */ }
+
+        attribute parachuteDeployTime : Real = 0.5 [s];
+        attribute batterySoc : Real;
+        attribute commLossTime : Real;
+        attribute sensorSelfTestFailed : Boolean;
+        attribute propulsionCriticalFailure : Boolean;
         attribute parachuteDeploymentLatency : DurationValue = 0.5 [s];
-        attribute currentParachuteDeploymentLatency : Real;
 
         satisfy requirement REQ_SAFE_001;
         satisfy requirement REQ_SAFE_002;
@@ -753,20 +920,15 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
         satisfy requirement REQ_SAFE_004;
         satisfy requirement REQ_SAFE_005;
 
-        action def initiateBatteryRtb { 
-            send ContingencyDetected() to overrideCmd; 
-        }
-        action def initiateEmergencyLand { }
-        action def preventArming { }
-        action def triggerParachute { 
-            send ParachuteCmdData() to parachuteCmd; 
-        }
-        action def deployParachute {}
-
         // PLAN-CONSTRAINT parachuteDeploymentLatencyConstraint provenance=FROZEN_REQUIREMENT activation=ALWAYS verification=PARAMETRIC_SWEEP
         assert constraint parachuteDeploymentLatencyConstraint {
             parachuteDeploymentLatency <= 0.5
         }
+
+        action def initiateBatteryRtb { }
+        action def initiateEmergencyLand { }
+        action def inhibitArming { }
+        action def deployParachute {}
 
         state def BatteryRtbMonitor {
             state RtbNominal;
@@ -820,51 +982,61 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
 
         state def SafetyArbiter {
             state ArbNominal;
+
             state ArbParachuteMode {
-                entry action onParachute : triggerParachute;
+                entry action onParachute : deployParachute;
             }
+
             state ArbSensorFailureMode {
-                entry action onSensorFail : preventArming;
+                entry action onSensorFailure : inhibitArming;
             }
+
             state ArbLandMode {
                 entry action onLand : initiateEmergencyLand;
             }
+
             state ArbRtbMode {
                 entry action onRtb : initiateBatteryRtb;
             }
+
             entry; then ArbNominal;
-            transition toArbParachute
+
+            transition toArbParachuteMode
                 first ArbNominal
                 if propulsionCriticalFailure
                 then ArbParachuteMode;
-            transition toArbSensorFail
+
+            transition toArbSensorFailureMode
                 first ArbNominal
                 if sensorSelfTestFailed
                 and not propulsionCriticalFailure
                 then ArbSensorFailureMode;
-            transition toArbLandBattery
+
+            transition toArbLandModeBattery
                 first ArbNominal
                 if batterySoc < 15.0
-                and not sensorSelfTestFailed
                 and not propulsionCriticalFailure
+                and not sensorSelfTestFailed
                 then ArbLandMode;
-            transition toArbLandComm
+
+            transition toArbLandModeComm
                 first ArbNominal
                 if commLossTime > 10.0
-                and not sensorSelfTestFailed
                 and not propulsionCriticalFailure
+                and not sensorSelfTestFailed
                 then ArbLandMode;
-            transition toArbRtb
+
+            transition toArbRtbMode
                 first ArbNominal
                 if batterySoc <= 25.0
                 and batterySoc >= 15.0
                 and commLossTime <= 10.0
-                and not sensorSelfTestFailed
                 and not propulsionCriticalFailure
+                and not sensorSelfTestFailed
                 then ArbRtbMode;
         }
 
-                                        state def ParachuteDeploymentBehavior {
+                                                                        state def ParachuteDeploymentBehavior {
             entry; then Monitoring;
 
             state Monitoring;
@@ -881,20 +1053,25 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     
     
     
+    
+    
+    
+    
     }
 
     part def Airframe {
         in port parachuteCmd : ParachuteCmdPort;
         out port takeOffMass : TakeOffMassPort;
+        in port remoteId : RemoteIdPort { doc /* Broadcast antenna; satisfies REQ_INTF_003 */ }
 
         satisfy requirement REQ_CONS_002;
         satisfy requirement REQ_CONS_003;
         satisfy requirement REQ_CONS_004;
     }
 
-    // --------------------------------------------------------
-    // Part Instantiations
-    // --------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // SYSTEM INSTANTIATION & CONNECTIONS
+    // -------------------------------------------------------------------------
     part flightController : FlightController;
     part perceptionSystem : PerceptionSystem;
     part communicationSystem : CommunicationSystem;
@@ -904,41 +1081,35 @@ package AutonomousDrone {    item def WaypointMissionCommandReceived;
     part safetyMonitor : SafetyMonitor;
     part airframe : Airframe;
 
-    // --------------------------------------------------------
-    // Connect Statements
-    // --------------------------------------------------------
     connect perceptionSystem.threatAvoidanceSeparation to flightController.threatAvoidanceSeparation;
+    connect propulsionSystem.payloadThrottleMargin to flightController.payloadThrottleMargin;
     connect perceptionSystem.attitudeDeviations to flightController.attitudeDeviations;
+    connect powerSystem.flightDuration to flightController.flightDuration;
     connect perceptionSystem.airspeed to flightController.airspeed;
     connect perceptionSystem.groundSpeed to flightController.groundSpeed;
-    connect perceptionSystem.flightAltitude to flightController.flightAltitude;
-    connect perceptionSystem.geographicPosition to flightController.geographicPosition;
-    connect perceptionSystem.landingState to flightController.landingState;
-    connect perceptionSystem.sensorStatus to safetyMonitor.sensorStatus;
-
-    connect communicationSystem.waypointMissionCommand to flightController.waypointMissionCommand;
-    connect communicationSystem.uplinkStatus to safetyMonitor.uplinkStatus;
-    connect communicationSystem.gnssCorrections to perceptionSystem.gnssCorrections;
-    connect communicationSystem.remoteId to flightController.remoteIdIn;
-    connect communicationSystem.commStatus to safetyMonitor.commStatus;
-
-    connect powerSystem.flightDuration to flightController.flightDuration;
     connect powerSystem.operationalRange to flightController.operationalRange;
+    connect perceptionSystem.flightAltitude to flightController.flightAltitude;
+    connect airframe.takeOffMass to flightController.takeOffMass;
+    connect communicationSystem.waypointMissionCommand to flightController.waypointMissionCommand;
+    connect safetyMonitor.armedAirborneOverrideCmd to flightController.armedAirborneOverrideCmd;
+    connect perceptionSystem.landingState to flightController.landingState;
+    connect perceptionSystem.geographicPosition to flightController.geographicPosition;
     connect powerSystem.batteryState to flightController.batteryState;
-    connect powerSystem.batteryState to safetyMonitor.batteryState;
-
-    connect propulsionSystem.payloadThrottleMargin to flightController.payloadThrottleMargin;
-    connect propulsionSystem.propulsionStatus to safetyMonitor.propulsionStatus;
-
+    
     connect flightController.mavlinkTelemetry to communicationSystem.mavlinkTelemetry;
     connect flightController.payloadCmd to payloadMechanism.payloadCmd;
     connect flightController.navigateRtbTrajectoryCmd to propulsionSystem.navigateRtbTrajectoryCmd;
-
-    connect safetyMonitor.armedAirborneOverrideCmd to flightController.armedAirborneOverrideCmd;
-    connect safetyMonitor.parachuteCmd to airframe.parachuteCmd;
     connect safetyMonitor.overrideCmd to flightController.overrideCmd;
 
-    connect airframe.takeOffMass to flightController.takeOffMass;
+    connect communicationSystem.gnssCorrections to perceptionSystem.gnssCorrections;
+    connect communicationSystem.uplinkStatus to safetyMonitor.uplinkStatus;
+    connect perceptionSystem.sensorStatus to safetyMonitor.sensorStatus;
+    connect powerSystem.batteryState to safetyMonitor.batteryState;
+    connect propulsionSystem.propulsionStatus to safetyMonitor.propulsionStatus;
+    connect communicationSystem.commStatus to safetyMonitor.commStatus;
+    connect safetyMonitor.parachuteCmd to airframe.parachuteCmd;
+    
+    connect communicationSystem.remoteId to airframe.remoteId;
 
     part def Catalog_r4_p15_c4PropulsionsystemImpl :> PropulsionSystem { attribute rotorCount : Real = 4.0; attribute rotorRadiusM : Real = 0.1905; attribute batteryCells : Real = 4.0; }
     part def Catalog_r4_p15_c6PropulsionsystemImpl :> PropulsionSystem { attribute rotorCount : Real = 4.0; attribute rotorRadiusM : Real = 0.1905; attribute batteryCells : Real = 6.0; }

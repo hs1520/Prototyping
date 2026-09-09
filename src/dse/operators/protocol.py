@@ -5,8 +5,7 @@ re-typed to a protocol-specific signal (MAVLink / CAN / Ethernet), power ports
 left untouched (domain separation). Replaces the regex
 ``apply_inject_protocol_to_sysml_text``. Each protocol is a pre-defined catalog
 signal port def (specialising an abstract ``Signal`` and carrying a
-protocol-specific item); all fragments are Syside 0.8.8 verified. See
-docs/DSE_OPERATORS.md §#3.
+protocol-specific item); all fragments are Syside 0.8.8 verified.
 """
 from __future__ import annotations
 

@@ -16,8 +16,8 @@
     "sha256": "465664e7b575d7a8e11ff79811ec0615686bc5366bafa1ab9852bb03ad3f0028"
   },
   "src.realization.realization_emitter:emit_realization_package": {
-    "bytes": 2327,
-    "sha256": "6cc60a8395dcb52172ed622abb4a4a3d28faf5e8c01d806af9757f4f74d85e8a"
+    "bytes": 2334,
+    "sha256": "aee6098a9ac23b5bb2f474b2f6cc9fa728bf874a59a3533ff2258c6faddc78ab"
   },
   "src.simulation.connectivity_fixer:ConnectStmt.to_sysml": {
     "bytes": 33,

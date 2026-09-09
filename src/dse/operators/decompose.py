@@ -4,8 +4,8 @@ Chooses the control topology: one centralised controller vs. a distributed set o
 controller nodes with a coordinator, replacing the scalar ``distributed_control``
 knob. Each variant is a pre-defined catalog structure that Syside parses cleanly
 and ``resolve`` binds the chosen topology instead of doing text surgery; all
-SysML v2 fragments are Syside 0.8.8 verified (0 errors). See
-docs/DSE_OPERATORS.md §#4 (literature: distributed / federated control patterns).
+SysML v2 fragments are Syside 0.8.8 verified (0 errors).
+Literature: distributed and federated control patterns.
 """
 from __future__ import annotations
 

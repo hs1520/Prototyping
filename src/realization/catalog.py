@@ -130,7 +130,7 @@ class ComponentCatalog:
 
 NO_INTEGRATION_BUNDLE = IntegrationBundle(
     name="No integration allowance (synthetic/legacy only)",
-    source_url="docs/REALIZATION_DESIGN.md#integration-mass-budget",
+    source_url="allowance defined in this module, not a manufacturer part",
     retrieved="2026-07-14",
     mass_g=0.0,
     components=(),
@@ -143,7 +143,7 @@ NO_INTEGRATION_BUNDLE = IntegrationBundle(
 # realization arithmetic.
 MULTIROTOR_INTEGRATION_BUDGET_500G = IntegrationBundle(
     name="Multirotor power-electronics and integration budget (500g)",
-    source_url="docs/REALIZATION_DESIGN.md#integration-mass-budget",
+    source_url="allowance defined in this module, not a manufacturer part",
     retrieved="2026-07-14",
     mass_g=500.0,
     components=(
@@ -158,7 +158,7 @@ MULTIROTOR_INTEGRATION_BUDGET_500G = IntegrationBundle(
 
 MULTIROTOR_INTEGRATION_BUDGET_400G = IntegrationBundle(
     name="Multirotor power-electronics and integration budget (400g quad)",
-    source_url="docs/REALIZATION_DESIGN.md#integration-mass-budget",
+    source_url="allowance defined in this module, not a manufacturer part",
     retrieved="2026-07-14",
     mass_g=400.0,
     components=(
@@ -173,7 +173,7 @@ MULTIROTOR_INTEGRATION_BUDGET_400G = IntegrationBundle(
 
 MULTIROTOR_INTEGRATION_BUDGET_600G = IntegrationBundle(
     name="Multirotor power-electronics and integration budget (600g octo)",
-    source_url="docs/REALIZATION_DESIGN.md#integration-mass-budget",
+    source_url="allowance defined in this module, not a manufacturer part",
     retrieved="2026-07-14",
     mass_g=600.0,
     components=(

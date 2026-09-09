@@ -107,7 +107,7 @@ class VariationDSEResult:
     exploratory_choices: Dict[str, str] = field(default_factory=dict)
     exploratory_design: Optional["DesignInputs"] = None
     # Weight-simplex sensitivity of the weight-stage pick over the official front
-    # (docs/DSE_REDESIGN.md §三-A). Diagnostic only: when recommended_by=="datasheet"
+    # Diagnostic only: when recommended_by=="datasheet"
     # the datasheet rank decides the final selection and the weights only break ties.
     weight_sensitivity: Optional[Dict] = None
 

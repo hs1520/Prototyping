@@ -3,7 +3,7 @@
 Ladder:  physics estimator (ms)  ->  SITL-default (s)  ->  Gazebo FDM (min).
 
 SITL-default has a fixed frame mass, so hover current is identical for quad and
-octa (27.3 A measured - see docs/DSE_REDESIGN.md §9.3/9.4): the capacity axis has
+octa (27.3 A measured): the capacity axis has
 a calibrated anchor (Spearman ρ=1.0) while the architecture axis (rotor count /
 radius / emergent mass) had only a declared scope limitation. This module flies
 the designed airframe in Gazebo (gazebo_poc puts mass, rotor count and radius in

@@ -2,8 +2,8 @@
 
 For a fixed architecture from the outer MO-MCTS, the inner layer tunes continuous
 parameters (e.g. control_frequency_hz): outer = discrete structure via MCTS,
-inner = continuous parameters via GP surrogate + Expected Improvement
-(docs/DSE_REDESIGN.md §五). Pure-Python (no numpy/scipy): a 1-D GP with an RBF
+inner = continuous parameters via GP surrogate + Expected Improvement.
+Pure-Python (no numpy/scipy): a 1-D GP with an RBF
 kernel solved by Cholesky, EI maximised over a candidate grid. BO is
 sample-efficient, so the matrices stay tiny (n_init + n_iter points). Extensible
 to D dimensions later.
