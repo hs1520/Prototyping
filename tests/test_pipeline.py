@@ -174,9 +174,6 @@ def test_run_report_evidence_digest():
 
     consistency = {
         "status": "PASS",
-        "model_digest": "digest",
-        "simulation_source_model_digest": "digest",
-        "evaluation_source_model_digest": "digest",
         "final_score": 0.7,
         "simulation": {
             "reachability_score": 0.5,
@@ -192,7 +189,7 @@ def test_run_report_evidence_digest():
     })
 
     assert report["terminal_consistency"] == consistency
-    assert report["simulation"]["source_model_digest"] == "digest"
+    assert report["simulation"]["scenarios_total"] == 0
 
 
 def test_run_report_collaboration():

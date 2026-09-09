@@ -224,7 +224,6 @@ def _extract_routed_ag_graph(
     source_requirement: str,
     *,
     revision: int | None = None,
-    model_digest: str | None = None,
 ):
     normalized = source_requirement.upper().replace("-", "_")
     matches = [
@@ -232,7 +231,6 @@ def _extract_routed_ag_graph(
         for graph in extract_ag_graphs(
             model_text,
             revision=revision,
-            model_digest=model_digest,
         )
         if (
             graph.system is not None
@@ -341,7 +339,6 @@ def attempt_dependency_closed_ag_repair(
         board.current_model.model_text,
         source_requirement,
         revision=board.current_revision,
-        model_digest=board.current_model.model_digest,
     )
     before = check_ag_graph(before_graph)
     before_ids = {(d.code, d.contract, d.subject) for d in before.errors()}

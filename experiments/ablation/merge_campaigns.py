@@ -49,7 +49,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=False)
     base = json.loads((Path(args.sources[0].partition(":")[0]) / "campaign.json").read_text())
     manifest = {
-        **{k: base.get(k) for k in ("system", "requirement_source", "requirements_digest",
+        **{k: base.get(k) for k in ("system", "requirement_source", "frozen_set_digest",
                                     "provider", "base_pipeline_kwargs", "mcts_iterations", "arm_registry")},
         "campaign": out.name,
         "merged_from": provenance,

@@ -12,7 +12,6 @@ decided. Physical timing still comes from the Gazebo observation of the actuatio
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -78,15 +77,11 @@ class ModelDrivenMission:
     # (adapter_constant, model_action) - actuation identities accepted by causal
     # role rather than spelling; the rename is recorded.
     action_resolutions: List[Tuple[str, str]] = field(default_factory=list)
-    _digest: str = ""
 
     def __post_init__(self) -> None:
         from src.simulation.state_extractor import extract_state_machines
         from src.simulation.state_executor import StateMachineInstance
 
-        self._digest = hashlib.sha256(
-            (self.model_text or "").encode("utf-8")
-        ).hexdigest()
         for sm in extract_state_machines(self.model_text or ""):
             # Load every machine, including guard-only ones: offer() steps them all and a
             # guard transition fires on the variables it is given whether or not the event
@@ -357,7 +352,6 @@ class ModelDrivenMission:
     def provenance(self) -> dict:
         """What was executed, so the evidence can name it."""
         return {
-            "model_sha256": self._digest,
             "machines": sorted(self.machines),
             "accepted_events": list(self.accepted_events()),
             "decision_owner": "generated model state machines",

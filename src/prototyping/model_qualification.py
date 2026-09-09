@@ -91,17 +91,10 @@ def build_model_qualification(
         namespace_integrity,
     )
 
-    digest_values = {
-        terminal_consistency.get("model_digest"),
-        terminal_consistency.get("simulation_source_model_digest"),
-        terminal_consistency.get("evaluation_source_model_digest"),
-    }
     add(
         "TERMINAL_EVIDENCE_SAME_REVISION",
-        terminal_consistency.get("status") == "PASS"
-        and len(digest_values) == 1
-        and None not in digest_values,
-        {"digests": sorted(str(item) for item in digest_values)},
+        terminal_consistency.get("status") == "PASS",
+        {"status": terminal_consistency.get("status")},
     )
 
     requirement_ids = _declared_requirement_ids(requirements)

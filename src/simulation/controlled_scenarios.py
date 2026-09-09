@@ -5,7 +5,6 @@ demand rather than wired into the runtime pipeline, so it is not dead code.
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -103,9 +102,6 @@ def evaluate_controlled_scenarios(
         "schema_version": CONTROLLED_SCENARIO_SCHEMA_VERSION,
         "artifact_type": "CONTROLLED_ROLE_SCENARIO_EVALUATION",
         "model_name": model_name,
-        "model_digest": hashlib.sha256(
-            (model_text or "").encode("utf-8")
-        ).hexdigest(),
         "scenario_set_fixed": True,
         "scenario_count": len(CONTROLLED_SCENARIOS),
         "role_assignments": roles,

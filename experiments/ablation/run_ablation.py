@@ -295,7 +295,6 @@ def _archive_failure(
         model_path = failed_dir / f"{stem}.sysml"
         model_path.write_text(model_text, encoding="utf-8")
         record["failed_model_path"] = str(model_path)
-        record["failed_model_digest"] = sha256_text(model_text)
     evidence = {
         "arm": arm_name,
         "seed": seed,
@@ -605,7 +604,6 @@ def main() -> int:
         "system": SYSTEM_NAME,
         "requirement_source": "examples/drone_system_v2.py "
                               "(DRONE_FROZEN_REQUIREMENTS)",
-        "requirements_digest": sha256_text("\n".join(DRONE_REQUIREMENTS)),
         "frozen_set_digest": getattr(DRONE_FROZEN_REQUIREMENTS, "digest", None),
         "provider": args.provider,
         "seeds": seed_ids,

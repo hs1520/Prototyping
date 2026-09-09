@@ -502,7 +502,6 @@ class CollaborationMixin:
         """
         from ..prototyping.blackboard import text_digest
 
-        model_digest = text_digest(model_text)
         model_name = getattr(model, "name", None) or (
             self.state.system_name if self.state is not None else "System"
         )
@@ -531,9 +530,6 @@ class CollaborationMixin:
         consistency = {
             "schema_version": "1.0",
             "status": "PASS",
-            "model_digest": model_digest,
-            "simulation_source_model_digest": model_digest,
-            "evaluation_source_model_digest": model_digest,
             "score_kind": "DETERMINISTIC_TERMINAL_RULE_SCORE",
             "final_score": final_score,
             "pre_terminal_iteration_score": prior_score,

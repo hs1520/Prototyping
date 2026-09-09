@@ -28,7 +28,6 @@ import json
 import re
 import sys
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -38,9 +37,8 @@ sys.path.insert(0, str(REPO / "examples"))
 sys.path.insert(0, str(REPO / "experiments" / "ablation"))
 
 import src.config  # noqa: F401,E402
-from src.utils.digest import sha256_text  # noqa: E402
 
-from arms import ARMS, BASELINE_ARM  # noqa: E402
+from arms import ARMS  # noqa: E402
 from run_ablation import (  # noqa: E402
     _capture_observer, _git, _infrastructure_failure, _mechanism_ledger,
 )
@@ -300,8 +298,7 @@ def run_one(provider: str, arm_name: str, set_name: str, mutated_text: str, edit
     stem = f"{arm_name}_{set_name}"
     runs = out_dir / "runs"; runs.mkdir(parents=True, exist_ok=True)
     record: Dict[str, Any] = {"arm": arm_name, "set": set_name, "edits": edits,
-                              "effective_pipeline_kwargs": kwargs,
-                              "mutated_digest": sha256_text(mutated_text)}
+                              "effective_pipeline_kwargs": kwargs}
     started = time.time()
     llm = None
     try:
@@ -420,7 +417,7 @@ def main() -> int:
         mutated[s] = (mtext, edits)
         (out_dir / f"mutated_{s}.sysml").write_text(mtext, encoding="utf-8")
     manifest = {
-        "campaign": out_dir.name, "source": str(src_dir / "runs" / stem), "source_digest": sha256_text(text),
+        "campaign": out_dir.name, "source": str(src_dir / "runs" / stem),
         "sets": {s: e for s, (_, e) in mutated.items()}, "arms": args.arms, "provider": args.provider,
         "cells": [f"{arm}:{s}" for arm, s in cells],
         "git_commit": _git("rev-parse", "HEAD"), "git_dirty": dirty, "started": stamp,

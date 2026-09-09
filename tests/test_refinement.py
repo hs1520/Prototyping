@@ -23,7 +23,6 @@ from src.dse.design_space import DesignConfiguration
 from src.sysml.model import PartDefinition, SysMLModel
 from src.sysml.lite_model import build_lite_model
 from src.simulation.validator import SimulationResult
-from src.prototyping.blackboard import text_digest
 from src.prototyping.generation_plan import ModelGenerationPlan
 from src.utils.sysml_text_utils import get_sysml_text
 
@@ -203,8 +202,6 @@ def test_conformance_keeps_history():
     model.metadata["whole_model_generation_plan"] = plan.to_dict()
     history_entry = {
         "stage": "POST_ASSEMBLY",
-        "input_model_digest": "before",
-        "output_model_digest": "after",
         "deterministic_changes": ["item feature Data.value"],
     }
     model.metadata["generation_plan_conformance"] = {
@@ -214,8 +211,6 @@ def test_conformance_keeps_history():
     plan_history_entry = {
         "stage": "POST_ASSEMBLY",
         "status": "PASS",
-        "input_model_digest": "input",
-        "output_model_digest": "output",
         "semantic_changes": ["item feature Data.value"],
         "added_ports": [],
         "added_connections": [],
@@ -346,17 +341,12 @@ class TestTerminalConsistencyGate:
             dse_best_config=None,
         )
 
-        digest = text_digest(terminal_text)
         assert get_sysml_text(model) == terminal_text
         assert seen["simulation_text"] == terminal_text
         assert score == 0.73
         assert sim is terminal_sim
         assert consistency["pre_terminal_iteration_score"] == 0.91
-        assert {
-            consistency["model_digest"],
-            consistency["simulation_source_model_digest"],
-            consistency["evaluation_source_model_digest"],
-        } == {digest}
+        assert consistency["status"] == "PASS"
 
 
 class TestPlanAwareStructuralGates:
@@ -526,7 +516,7 @@ class TestPlanAwareStructuralGates:
             requirements=("REQ_FUNC_001: propagate signal",),
         ))
 
-        assert outcome.revision.digest == ModelRevision.capture(current).digest
+        assert outcome.revision.sysml == ModelRevision.capture(current).sysml
         assert outcome.evidence["events"][-1]["decision"] == (
             "PLAN_CONFORMANCE_FAILED"
         )
@@ -1064,7 +1054,6 @@ class TestFunctionalClosurePass:
         orch.last_functional_closure = {
             "status": "CLOSED",
             "remaining_gap_req_ids": [],
-            "closure_model_digest": "pre-terminal",
         }
         orch.refinement_closure = RefinementClosure(
             orch,
@@ -1083,8 +1072,6 @@ class TestFunctionalClosurePass:
             "REOPENED_BY_TERMINAL_MATERIALIZATION"
         )
         assert closure["remaining_gap_req_ids"] == ["REQ_FUNC_006"]
-        assert closure["closure_model_digest"] == "pre-terminal"
-        assert len(closure["terminal_model_digest"]) == 64
 
 
 class TestIterativeRefinementIntegration:

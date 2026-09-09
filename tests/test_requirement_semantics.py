@@ -145,7 +145,6 @@ def test_lower_bound_compiles():
     assert obligation.activation_kind == "CONTEXTUAL"
     assert obligation.activation_clause == "while avoiding it"
     assert obligation.source_clause.endswith("while avoiding it")
-    assert len(obligation.source_digest) == 64
 
 
 def test_timed_requirement_not_compiled():

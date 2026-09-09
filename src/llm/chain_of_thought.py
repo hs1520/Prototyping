@@ -8,7 +8,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ..utils.digest import sha256_text
 from .interface import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_TEMPERATURE,
@@ -1739,7 +1738,6 @@ comments and blank lines, do not repeat declarations, start immediately with
 
     def _parse_cot_response(self, response_text: str) -> CoTResult:
         result = CoTResult(final_answer=response_text)
-        response_digest = sha256_text(response_text or "")
 
         sysml_pattern = r"```sysml\n(.*?)```"
         sysml_matches = re.findall(sysml_pattern, response_text, re.DOTALL)
@@ -1771,7 +1769,6 @@ comments and blank lines, do not repeat declarations, start immediately with
                 json_candidate = stripped
 
         json_diagnostic: Dict[str, Any] = {
-            "response_digest": response_digest,
             "source": json_source or "NONE",
             "status": (
                 # An opened but never closed ```json fence marks a response the provider cut off

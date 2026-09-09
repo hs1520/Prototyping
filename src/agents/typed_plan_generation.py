@@ -259,7 +259,6 @@ class TypedPlanGeneration:
                 correction_outcome = "REGRESSED_NEW_ISSUE"
             attempt_record = {
                 "attempt": attempt_index + 1,
-                "response_digest": parse_diagnostic.get("response_digest"),
                 "response_excerpt": " ".join(
                     (response.final_answer or "").split()
                 )[:800],

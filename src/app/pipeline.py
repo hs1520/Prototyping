@@ -334,14 +334,10 @@ class PrototypingPipeline:
         if suppressed:
             report["suppressed"] = suppressed
         if sim is not None:
-            consistency = result.get("terminal_consistency") or {}
             report["simulation"] = {
                 "reachability_score": getattr(sim, "reachability_score", None),
                 "scenarios_passed": len(sim.passed_scenarios()),
                 "scenarios_total": len(sim.scenario_results),
-                "source_model_digest": consistency.get(
-                    "simulation_source_model_digest"
-                ),
             }
         ver = result.get("dse_verification")
         if ver:

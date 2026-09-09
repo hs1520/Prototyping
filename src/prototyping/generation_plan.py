@@ -52,7 +52,6 @@ from .planned_behavior import (
     validate_planned_behaviors,
 )
 from .sysml_reserved import SYSML_RESERVED_WORDS  # noqa: F401  (re-export)
-from ..utils.digest import sha256_text
 from ..utils.req_id import normalise_req_id
 from ..utils.sysml_text_utils import (
     IDENTIFIER_RE,
@@ -350,8 +349,6 @@ def append_plan_application_history(
     event = {
         "stage": stage,
         "status": str(conformance.get("status") or "UNKNOWN"),
-        "input_model_digest": conformance.get("input_model_digest"),
-        "output_model_digest": conformance.get("output_model_digest"),
         "semantic_changes": semantic_changes,
         "added_ports": list(
             conformance.get("deterministically_added_ports") or ()
@@ -362,8 +359,6 @@ def append_plan_application_history(
     }
     key = (
         event["stage"],
-        event["input_model_digest"],
-        event["output_model_digest"],
         tuple(event["semantic_changes"]),
         tuple(event["added_ports"]),
         tuple(event["added_connections"]),
@@ -371,8 +366,6 @@ def append_plan_application_history(
     existing_keys = {
         (
             item.get("stage"),
-            item.get("input_model_digest"),
-            item.get("output_model_digest"),
             tuple(item.get("semantic_changes") or ()),
             tuple(item.get("added_ports") or ()),
             tuple(item.get("added_connections") or ()),
@@ -1466,23 +1459,6 @@ class ModelGenerationPlan:
             for item in raw_realizations
             if isinstance(item, Mapping)
         )
-        if requirements and requirement_realizations:
-            requirement_source_by_id: dict[str, str] = {}
-            for requirement in requirements:
-                source_text = str(requirement or "").strip()
-                for req_id in _req_ids((source_text,)):
-                    requirement_source_by_id[req_id] = source_text
-            requirement_realizations = tuple(
-                replace(
-                    item,
-                    source_digest=sha256_text(
-                        requirement_source_by_id[item.requirement_id]
-                    ),
-                )
-                if item.requirement_id in requirement_source_by_id
-                else item
-                for item in requirement_realizations
-            )
         # behaviors[] is the sole writer of every behaviour it names
         # (materialize_planned_behaviors) and always materialises `state def`,
         # so a realization's behavior_kind for such a name is derived data: run
@@ -2743,8 +2719,6 @@ def apply_generation_plan(
         ),
         "justified_extension_ports": justified_extension_ports,
         "justified_extension_connections": justified_extension_connections,
-        "input_model_digest": sha256_text(str(model_text or "")),
-        "output_model_digest": sha256_text(final_text),
         "status": (
             "PASS"
             if plan.status == "PASS" and not issues and not missing

@@ -4,7 +4,7 @@ The extractor half of Increment 2 (§6.2, §15 of
 ``docs/OPTION2_IMPLEMENTATION_DESIGN.md``). The committed SysML model is the
 semantic authority: A/G facts are read out of the model using the validated
 bounded convention, never supplied from JSON. The output :class:`AGGraph` carries
-the source revision/digest and per-element spans, so the derived
+the source revision and per-element spans, so the derived
 ``ag_contract_graph.json`` view (§14) stays attributable and regenerable.
 
 Bounded convention (validated against the Syside gate - see
@@ -40,7 +40,6 @@ from .ag_contracts import (
     InvariantRealization,
     Span,
 )
-from .blackboard import text_digest
 from ..utils.sysml_text_utils import (
     STATE_DEF_RE as _STATE_DEF_RE,
     find_block_end,
@@ -598,7 +597,6 @@ def extract_ag_graphs(
     sysml_text: str,
     *,
     revision: Optional[int] = None,
-    model_digest: Optional[str] = None,
 ) -> List[AGGraph]:
     """Extract one bounded A/G graph per selected chain in the committed model.
 
@@ -612,17 +610,16 @@ def extract_ag_graphs(
     the single-chain path. With two or more, the base model (which carries the source
     ``requirement def`` provenance) is paired with each A/G package in turn, so every
     per-chain graph resolves its system contract and keeps its source-requirement
-    provenance. Each reports the committed model's revision/digest, not the slice's.
+    provenance. Each reports the committed model's revision, not the slice's.
     """
     text = sysml_text or ""
-    digest = model_digest if model_digest is not None else text_digest(text)
     ag_spans = [
         (start, end)
         for (_name, start, end) in _top_level_packages(text)
         if _AG_PACKAGE_MARKER in text[start:end]
     ]
     if len(ag_spans) <= 1:
-        return [extract_ag_graph(text, revision=revision, model_digest=digest)]
+        return [extract_ag_graph(text, revision=revision)]
 
     # Base model = everything that is not an A/G package (source requirement defs
     # live here); it is prepended to each A/G package so provenance resolves.
@@ -638,7 +635,7 @@ def extract_ag_graphs(
     for start, end in sorted(ag_spans):
         slice_text = base + "\n\n" + text[start:end] + "\n"
         graphs.append(
-            extract_ag_graph(slice_text, revision=revision, model_digest=digest)
+            extract_ag_graph(slice_text, revision=revision)
         )
     return graphs
 
@@ -647,11 +644,9 @@ def extract_ag_graph(
     sysml_text: str,
     *,
     revision: Optional[int] = None,
-    model_digest: Optional[str] = None,
 ) -> AGGraph:
     """Parse committed SysML v2 text into a bounded A/G graph (§6.2)."""
     text = sysml_text or ""
-    digest = model_digest if model_digest is not None else text_digest(text)
     parse_diags: List[AGDiagnostic] = []
 
     raw: Dict[str, Contract] = {}
@@ -787,7 +782,6 @@ def extract_ag_graph(
         components=tuple(components),
         edges=tuple(edges),
         revision=revision,
-        model_digest=digest,
         parse_diagnostics=tuple(parse_diags),
         behaviors=tuple(behaviors),
         invariant_realizations=invariant_realizations,
