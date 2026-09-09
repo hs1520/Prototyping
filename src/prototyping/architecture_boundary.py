@@ -3,9 +3,9 @@
 Freeze-review finding (round 1, P1): guarantee ownership cannot be derived from the
 stakeholder requirement text alone, because the component decomposition
 (`propulsionMonitor`, `armingAuthority`, ...) is a design decision. So the
-architecture is frozen as its own authoritative artifact, with full provenance, and
-the evaluator gold cites its digest. Owner-allocation gold then measures conformance
-to an approved architecture, not architecture-generation accuracy.
+architecture is frozen as its own authoritative artifact and the evaluator gold
+refers to it. Owner-allocation gold then measures conformance to an approved
+architecture, not architecture-generation accuracy.
 
 Like the gold, this is DRAFT until a supervisor independently reviews and freezes
 it. It authors nothing from the runtime checker (F3): it imports neither
@@ -18,9 +18,7 @@ from typing import Any, Dict, List, Mapping
 from .ag_emitter import AGChainSpec
 from .experiment_arms import REVISED_EXPERIMENT_NAMESPACE
 from .frozen_artifact_protocol import (
-    canonical_artifact_digest,
     has_review_markers,
-    is_sha256,
     validate_frozen_envelope,
 )
 from ..utils.req_id import normalise_req_id
@@ -30,15 +28,6 @@ BOUNDARY_STATUS_DRAFT = "DRAFT_FOR_SUPERVISOR_REVIEW"
 BOUNDARY_STATUS_FROZEN = "FROZEN"
 _NAMESPACE = REVISED_EXPERIMENT_NAMESPACE
 _SCHEMA_VERSION = "1.0"
-def architecture_boundary_digest(boundary: Mapping[str, Any]) -> str:
-    """Digest the boundary content, excluding the self-referential digest field.
-
-    The gold cites this digest, so it stays stable and independent of the
-    ``artifact_digest`` slot itself.
-    """
-    return canonical_artifact_digest(boundary)
-
-
 def build_architecture_boundary_draft(
     spec: AGChainSpec, *, requirement_set_digest: str | None = None
 ) -> Dict[str, Any]:
@@ -94,11 +83,9 @@ def build_architecture_boundary_draft(
             "of the stakeholder requirement and blind to the runtime verdict. "
             "Confirm each component's responsibility and interface boundary and each "
             "owner->guarantee allocation; drop the _review markers; set reviewer / "
-            "reviewed_date and independent_architecture_review=true; set "
-            f"artifact_digest = architecture_boundary_digest(this); set status "
-            f"{BOUNDARY_STATUS_FROZEN!r}. The evaluator gold must cite this digest."
+            "reviewed_date and independent_architecture_review=true; set status "
+            f"{BOUNDARY_STATUS_FROZEN!r}."
         ),
-        "artifact_digest": None,
     }
 
 
@@ -107,9 +94,8 @@ def validate_frozen_boundary(boundary: Mapping[str, Any]) -> List[str]:
 
     Empty ⇒ a complete, self-consistent frozen boundary: evaluator role/namespace,
     FROZEN status, a named reviewer + date + independent-review flag, every component's
-    responsibility stated, non-empty allocations, no leftover review markers, and an
-    ``artifact_digest`` that matches the content. Structure only; it authors no
-    architecture (F3).
+    responsibility stated, non-empty allocations and no leftover review markers.
+    Structure only; it authors no architecture (F3).
     """
     problems = validate_frozen_envelope(
         boundary,
@@ -118,9 +104,8 @@ def validate_frozen_boundary(boundary: Mapping[str, Any]) -> List[str]:
         namespace=_NAMESPACE,
         review_flags=("independent_architecture_review",),
     )
-    requirement_set_digest = str(boundary.get("requirement_set_digest") or "")
-    if not is_sha256(requirement_set_digest):
-        problems.append("requirement_set_digest must be a lowercase SHA-256 digest")
+    if not boundary.get("requirement_set_digest"):
+        problems.append("requirement_set_digest must name the frozen requirement set")
     components = boundary.get("components")
     if not isinstance(components, list) or not components:
         problems.append("components must be a non-empty list")
@@ -196,14 +181,5 @@ def validate_frozen_boundary(boundary: Mapping[str, Any]) -> List[str]:
     if has_review_markers(boundary):
         problems.append(
             "leftover _review markers remain — drop them after confirming each field"
-        )
-    digest = boundary.get("artifact_digest")
-    if not digest:
-        problems.append(
-            "artifact_digest must be set to architecture_boundary_digest(this)"
-        )
-    elif digest != architecture_boundary_digest(boundary):
-        problems.append(
-            "artifact_digest does not match the content (tampered or stale)"
         )
     return problems

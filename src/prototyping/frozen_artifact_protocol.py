@@ -1,38 +1,10 @@
-"""Shared freeze, review and tamper-evidence protocol for human artifacts."""
+"""Shared freeze and review protocol for human-authored artifacts."""
 from __future__ import annotations
 
 from datetime import date
-import hashlib
-import json
-import re
 from typing import Any, Mapping, Sequence
 
 from ..utils.req_id import normalise_req_id
-
-
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
-def canonical_artifact_digest(
-    artifact: Mapping[str, Any],
-    *,
-    excluded_fields: Sequence[str] = ("artifact_digest",),
-) -> str:
-    """Hash canonical JSON after excluding self-referential envelope fields."""
-    excluded = frozenset(excluded_fields)
-    content = {key: value for key, value in artifact.items() if key not in excluded}
-    raw = json.dumps(
-        content,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def is_sha256(value: Any) -> bool:
-    return bool(_SHA256_RE.fullmatch(str(value or "")))
 
 
 def valid_iso_date(value: Any) -> bool:

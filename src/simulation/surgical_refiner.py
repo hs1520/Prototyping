@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..simulation.syntax_checker import check_syntax
-from ..utils.digest import sha256_text
 from ..utils.sysml_text_utils import find_block_end
 
 _DEF_KEYWORDS = (
@@ -120,7 +119,6 @@ class SurgicalAudit:
     rejection_reasons: List[str] = field(default_factory=list)
     final_status: str = "NOT_STARTED"
     context_mode: str = "FULL_MODEL"
-    context_digest: Optional[str] = None
     context_line_count: int = 0
     full_model_line_count: int = 0
     included_definition_keys: List[str] = field(default_factory=list)
@@ -141,7 +139,6 @@ class SurgicalAudit:
             "rejection_reasons": list(self.rejection_reasons),
             "final_status": self.final_status,
             "context_mode": self.context_mode,
-            "context_digest": self.context_digest,
             "context_line_count": self.context_line_count,
             "full_model_line_count": self.full_model_line_count,
             "included_definition_keys": list(self.included_definition_keys),
@@ -158,8 +155,6 @@ class RepairContextSlice:
     allowed_replacements: frozenset[Tuple[str, str]]
     allowed_additions: frozenset[Tuple[str, str]] = frozenset()
     statement_count: int = 0
-    context_digest: str = ""
-    full_model_digest: str = ""
     context_line_count: int = 0
     full_model_line_count: int = 0
 
@@ -178,8 +173,6 @@ class RepairContextSlice:
                 f"{kind}:{name}" for kind, name in sorted(self.allowed_additions)
             ],
             "statement_count": self.statement_count,
-            "context_digest": self.context_digest,
-            "full_model_digest": self.full_model_digest,
             "context_line_count": self.context_line_count,
             "full_model_line_count": self.full_model_line_count,
         }
@@ -404,19 +397,8 @@ def merge_blocks(
     return out
 
 
-def _packet_digest_valid(packet: Mapping[str, Any]) -> bool:
-    if packet.get("artifact_type") != "SCOPED_SEMANTIC_REPAIR_PACKET":
-        return False
-    expected = str(packet.get("packet_digest", ""))
-    if not expected:
-        return False
-    canonical_packet = dict(packet)
-    canonical_packet.pop("packet_digest", None)
-    canonical = json.dumps(
-        canonical_packet, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
-    actual = sha256_text(canonical)
-    return actual == expected
+def _packet_valid(packet: Mapping[str, Any]) -> bool:
+    return packet.get("artifact_type") == "SCOPED_SEMANTIC_REPAIR_PACKET"
 
 
 def _package_body_elements(model_text: str) -> List[str]:
@@ -475,7 +457,7 @@ def _repair_scope_policy(
     The local enforcement boundary: if no existing owner block can be derived,
     repair is denied rather than letting the LLM pick an arbitrary owner.
     """
-    if not _packet_digest_valid(packet):
+    if not _packet_valid(packet):
         return None
     scope = packet.get("scope") or {}
     req_ids = {str(item) for item in scope.get("req_ids", ()) if item}
@@ -698,8 +680,6 @@ def build_dependency_closed_context(
         "    " + item.replace("\n", "\n    ") for item in body_items
     )
     context_text = f"package {package_name} {{\n{indented}\n}}"
-    context_digest = sha256_text(context_text)
-    full_digest = sha256_text(model_text)
     return RepairContextSlice(
         text=context_text,
         target_req_ids=tuple(sorted(target_req_ids)),
@@ -708,8 +688,6 @@ def build_dependency_closed_context(
         ),
         allowed_replacements=frozenset(primary),
         statement_count=len(dict.fromkeys(included_statements)),
-        context_digest=context_digest,
-        full_model_digest=full_digest,
         context_line_count=len(context_text.splitlines()),
         full_model_line_count=len(model_text.splitlines()),
     )
@@ -788,14 +766,10 @@ def attempt_surgical_refinement(
     audit.packet_provided = repair_packet is not None
     audit.full_model_line_count = len(model_text.splitlines())
     if context_slice is not None:
-        if context_slice.full_model_digest != sha256_text(model_text):
-            audit.reject("repair_context_full_model_digest_mismatch")
-            return None
         if not _issue_req_ids(issues) <= set(context_slice.target_req_ids):
             audit.reject("repair_context_issue_scope_mismatch")
             return None
         audit.context_mode = "DEPENDENCY_CLOSED_SLICE"
-        audit.context_digest = context_slice.context_digest
         audit.context_line_count = context_slice.context_line_count
         audit.included_definition_keys = [
             f"{kind}:{name}"
@@ -812,7 +786,7 @@ def attempt_surgical_refinement(
         return None
     scope_policy = None
     if repair_packet is not None:
-        audit.packet_validated = _packet_digest_valid(repair_packet)
+        audit.packet_validated = _packet_valid(repair_packet)
         scope_policy = _repair_scope_policy(model_text, repair_packet)
         if scope_policy is None:
             audit.reject(

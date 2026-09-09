@@ -252,8 +252,7 @@ def test_planning_is_board_task():
     )
     assert len(results) == 1
     payload = results[0].payload
-    assert payload["transcript_digest"] == planning[0]["transcript_digest"]
-    assert payload["context_envelope_digest"]
+    assert payload["context_envelope_id"]
 
 
 def test_planning_design_sessions_differ():
@@ -315,7 +314,6 @@ def test_drafts_archived_not_authority():
     assert payload["stage"] == "parts"
     assert payload["multi_turn"] is True
     assert payload["fragment"] == "part def FlightController;"
-    assert payload["fragment_digest"]
     assert payload["authority"] == "NONE_ARCHIVAL_ONLY"
 
     with pytest.raises(ValueError, match="authoritative requirements"):

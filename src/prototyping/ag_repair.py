@@ -368,8 +368,6 @@ def attempt_dependency_closed_ag_repair(
             task_id=task.task_id,
             session_id=session.session_id,
             details={
-                "context_envelope_digest": envelope.envelope_digest,
-                "transcript_digest": session.transcript_digest,
             },
         )
         board.transition_task(
@@ -394,8 +392,6 @@ def attempt_dependency_closed_ag_repair(
             task_id=task.task_id,
             session_id=session.session_id,
             details={
-                "context_envelope_digest": envelope.envelope_digest,
-                "transcript_digest": session.transcript_digest,
                 # Which gate refused, not just that one did: without it an
                 # out-of-scope edit, an unparseable patch and an over-strict gate
                 # all look identical in `repair_decisions.json`.
@@ -501,8 +497,6 @@ def attempt_dependency_closed_ag_repair(
             task_id=task.task_id,
             session_id=session.session_id,
             details={
-                "context_envelope_digest": envelope.envelope_digest,
-                "transcript_digest": session.transcript_digest,
                 # which of the three gate conditions failed, and what changed.
                 # "target_not_removed_or_regression" names three possibilities at
                 # once, so a reader of repair_decisions.json could not tell a missed
@@ -568,8 +562,6 @@ def attempt_dependency_closed_ag_repair(
         task_id=task.task_id,
         session_id=session.session_id,
         details={
-            "context_envelope_digest": envelope.envelope_digest,
-            "transcript_digest": session.transcript_digest,
         },
     )
     session.close(
